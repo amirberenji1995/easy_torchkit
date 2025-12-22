@@ -2,4 +2,4 @@ torch
 torchinfo
 seaborn
 pydantic
-sklearn
+scikit-learn
