@@ -85,42 +85,26 @@ class ClassificationModel(BaseModel):
     ):
         from sklearn.model_selection import train_test_split
 
-        self.loss_fn = loss_fn
-        self.optimizer = optimizer
         self.metrics = params.metrics
 
-        # -------------------------
         # Train / Val split
-        # -------------------------
         x_train, x_val, y_train, y_val = train_test_split(
-            x.cpu(),
-            y.cpu(),
+            x.cpu(), y.cpu(),
             test_size=params.val_size,
-            stratify=y.cpu(),
+            stratify=y.cpu()
         )
-
         x_train, y_train = x_train.to(self.device), y_train.to(self.device)
         x_val, y_val = x_val.to(self.device), y_val.to(self.device)
 
-        # -------------------------
-        # History initialization
-        # -------------------------
-        history = TrainingHistory(
-            params = params,
-            phase = params.phase
-        )
-
+        # History
+        history = TrainingHistory(params=params, phase=params.phase)
         history.initialize()
         self.history.append(history)
         current_history = history
 
         patience_counter = 0
 
-        # -------------------------
-        # Epoch loop
-        # -------------------------
         for epoch in range(1, params.epochs + 1):
-            # ---- Training ----
             train_loss = self._train_one_epoch(
                 x_train=x_train,
                 y_train=y_train,
@@ -134,22 +118,21 @@ class ClassificationModel(BaseModel):
 
             current_history.log_train({
                 "loss": train_loss,
-                **{k: v for k, v in train_metrics.items() if k != "loss"},
+                "accuracy": train_metrics["accuracy"],
+                **{k: v for k, v in train_metrics.items() if k not in ["loss", "accuracy"]},
             })
 
             current_history.log_val({
                 "loss": val_metrics["loss"],
-                **{k: v for k, v in val_metrics.items() if k != "loss"},
+                "accuracy": val_metrics["accuracy"],
+                **{k: v for k, v in val_metrics.items() if k not in ["loss", "accuracy"]},
             })
 
-
-
-            # ---- Best model tracking ----
+            # Best model tracking
             if self.track_best_model and val_metrics["loss"] < self.best_val_loss:
                 self.best_val_loss = val_metrics["loss"]
                 self.best_state_dict = {
-                    k: v.detach().cpu().clone()
-                    for k, v in self.state_dict().items()
+                    k: v.detach().cpu().clone() for k, v in self.state_dict().items()
                 }
                 self.best_epoch = epoch
                 self.best_metrics = val_metrics
@@ -157,12 +140,10 @@ class ClassificationModel(BaseModel):
             else:
                 patience_counter += 1
 
-            # ---- Early stopping ----
             if self.early_stopping and patience_counter >= self.early_stopping_patience:
                 print(f"\n⏹ Early stopping at epoch {epoch}")
                 break
 
-            # ---- Logging ----
             if epoch % params.print_every == 0:
                 print(
                     f"[{params.phase.upper()} | Epoch {epoch}/{params.epochs}] "
@@ -181,10 +162,8 @@ class ClassificationModel(BaseModel):
         self.to(self.device)
         x_train, y_train = x_train.to(self.device), y_train.to(self.device)
 
-        if self.loss_fn is None:
-            raise ValueError("Loss function must be set before calling fit().")
-
-        optimizer = torch.optim.Adam(
+        loss_fn = training_params.loss_fn()
+        optimizer = training_params.optimizer(
             filter(lambda p: p.requires_grad, self.parameters()),
             lr=training_params.lr,
         )
@@ -193,7 +172,7 @@ class ClassificationModel(BaseModel):
             x=x_train,
             y=y_train,
             optimizer=optimizer,
-            loss_fn=self.loss_fn,
+            loss_fn=loss_fn,
             params=training_params,
         )
 
