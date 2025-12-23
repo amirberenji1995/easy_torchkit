@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from enum import StrEnum
-from typing import Callable, List, Literal, Dict
+from typing import Callable, List, Literal, Dict, Optional, Any
 import torch
 
 class Task(StrEnum):
@@ -19,6 +19,7 @@ class TrainingPhaseType(StrEnum):
     training="training"
     fine_tuning="fine_tuning"
 
+
 class TrainingParams(BaseModel):
     epochs: int = 10
     lr: float = 0.001
@@ -28,6 +29,7 @@ class TrainingParams(BaseModel):
     metrics: List[EvaluationMetric] = []
     loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = torch.nn.CrossEntropyLoss
     optimizer: type[torch.optim.Optimizer] = torch.optim.Adam
+    optimizer_params: Optional[Dict[str, Any]] = None
     phase: TrainingPhaseType = TrainingPhaseType.training
 
 
