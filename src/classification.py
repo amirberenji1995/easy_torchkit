@@ -1,7 +1,7 @@
 import torch
-from typing import Callable, List
-from configurations import TrainingParams, Task
-from base_model import BaseModel
+from typing import Callable, List, Iterable
+from src.configurations import TrainingParams, Task, TrainingHistory
+from src.base_model import BaseModel
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -24,7 +24,7 @@ class ClassificationModel(BaseModel):
         super(ClassificationModel, self).__init__(task=Task.classification, device=device)
         self.loss_fn: Callable | None = None
         self.optimizer: torch.optim.Optimizer | None = None
-        self.history: dict | None = None
+        self.history: List[TrainingHistory] =[]
         self.metrics: List | None = None
         
         self.track_best_model = track_best_model
@@ -42,239 +42,194 @@ class ClassificationModel(BaseModel):
 
     def summary(self, input_size, **kwargs):
         return torchinfo_summary(self, input_size, **kwargs)
-    def register_loss(self, loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = torch.nn.CrossEntropyLoss) -> None:
-        """
-        Register the loss function for classification training.
-        Default value is CrossEntropyLoss.
-        """
-        self.loss_fn = loss
 
-    def register_optimizer(self, optimizer: torch.optim.Optimizer) -> None:
-        self.optimizer = optimizer
+    def _train_one_epoch(
+        self,
+        x_train: torch.Tensor,
+        y_train: torch.Tensor,
+        *,
+        optimizer: torch.optim.Optimizer,
+        loss_fn: Callable,
+        batch_size: int,
+    ):
+        self.train()
+        epoch_loss = 0.0
 
-    # -------------------------------------------
-    # FIT (simple, straightforward)
-    # -------------------------------------------
-    def fit(
+        if batch_size == "full":
+            batch_size = x_train.size(0)
+
+        num_batches = (x_train.size(0) + batch_size - 1) // batch_size
+
+        for i in range(num_batches):
+            xb = x_train[i * batch_size:(i + 1) * batch_size]
+            yb = y_train[i * batch_size:(i + 1) * batch_size]
+
+            optimizer.zero_grad()
+            logits = self(xb)
+            loss = loss_fn(logits, yb)
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item() * xb.size(0)
+
+        return epoch_loss / x_train.size(0)
+
+    def _run_training_loop(
         self,
         x: torch.Tensor,
         y: torch.Tensor,
+        *,
+        optimizer: torch.optim.Optimizer,
+        loss_fn: Callable,
+        params: TrainingParams,
+    ):
+        from sklearn.model_selection import train_test_split
+
+        self.loss_fn = loss_fn
+        self.optimizer = optimizer
+        self.metrics = params.metrics
+
+        # -------------------------
+        # Train / Val split
+        # -------------------------
+        x_train, x_val, y_train, y_val = train_test_split(
+            x.cpu(),
+            y.cpu(),
+            test_size=params.val_size,
+            stratify=y.cpu(),
+        )
+
+        x_train, y_train = x_train.to(self.device), y_train.to(self.device)
+        x_val, y_val = x_val.to(self.device), y_val.to(self.device)
+
+        # -------------------------
+        # History initialization
+        # -------------------------
+        history = TrainingHistory(
+            params = params,
+            phase = params.phase
+        )
+
+        history.initialize()
+        self.history.append(history)
+        current_history = history
+
+        patience_counter = 0
+
+        # -------------------------
+        # Epoch loop
+        # -------------------------
+        for epoch in range(1, params.epochs + 1):
+            # ---- Training ----
+            train_loss = self._train_one_epoch(
+                x_train=x_train,
+                y_train=y_train,
+                optimizer=optimizer,
+                loss_fn=loss_fn,
+                batch_size=params.batch_size,
+            )
+
+            train_metrics = self.evaluate(x_train, y_train)
+            val_metrics = self.evaluate(x_val, y_val)
+
+            current_history.log_train({
+                "loss": train_loss,
+                **{k: v for k, v in train_metrics.items() if k != "loss"},
+            })
+
+            current_history.log_val({
+                "loss": val_metrics["loss"],
+                **{k: v for k, v in val_metrics.items() if k != "loss"},
+            })
+
+
+
+            # ---- Best model tracking ----
+            if self.track_best_model and val_metrics["loss"] < self.best_val_loss:
+                self.best_val_loss = val_metrics["loss"]
+                self.best_state_dict = {
+                    k: v.detach().cpu().clone()
+                    for k, v in self.state_dict().items()
+                }
+                self.best_epoch = epoch
+                self.best_metrics = val_metrics
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            # ---- Early stopping ----
+            if self.early_stopping and patience_counter >= self.early_stopping_patience:
+                print(f"\n⏹ Early stopping at epoch {epoch}")
+                break
+
+            # ---- Logging ----
+            if epoch % params.print_every == 0:
+                print(
+                    f"[{params.phase.upper()} | Epoch {epoch}/{params.epochs}] "
+                    f"Train Loss: {train_loss:.4f} | "
+                    f"Val Loss: {val_metrics['loss']:.4f} | "
+                    f"Val Acc: {val_metrics['accuracy']:.4f}"
+                )
+
+
+    def fit(
+        self,
+        x_train: torch.Tensor,
+        y_train: torch.Tensor,
         training_params: TrainingParams,
     ):
-        """
-        Train the classification model with optional best-model tracking
-        and early stopping based on validation loss.
-        """
+        self.to(self.device)
+        x_train, y_train = x_train.to(self.device), y_train.to(self.device)
 
         if self.loss_fn is None:
-            raise ValueError("Loss function is not registered. Call register_loss().")
+            raise ValueError("Loss function must be set before calling fit().")
 
-        if not hasattr(self, "optimizer") or self.optimizer is None:
-            raise ValueError("Optimizer is not registered. Call register_optimizer().")
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, self.parameters()),
+            lr=training_params.lr,
+        )
 
-        optimizer = self.optimizer
+        self._run_training_loop(
+            x=x_train,
+            y=y_train,
+            optimizer=optimizer,
+            loss_fn=self.loss_fn,
+            params=training_params,
+        )
 
-        self.metrics = training_params.metrics
-        self.to(self.device)
-        x, y = x.to(self.device), y.to(self.device)
-
-        # -------------------------------
-        # Random validation split (fixed)
-        # -------------------------------
-        N = x.shape[0]
-        val_size = int(training_params.val_size * N)
-
-        if val_size > 0:
-            indices = torch.randperm(N)
-            val_idx = indices[:val_size]
-            train_idx = indices[val_size:]
-
-            x_train, y_train = x[train_idx], y[train_idx]
-            x_val, y_val = x[val_idx], y[val_idx]
-        else:
-            x_train, y_train = x, y
-            x_val = y_val = None
-
-        if training_params.batch_size == "full":
-            batch_size = x_train.size(0)
-            num_batches = 1
-        else:
-            batch_size = training_params.batch_size
-            num_batches = (x_train.size(0) + batch_size - 1) // batch_size
-
-        # -------------------------------
-        # Initialize history
-        # -------------------------------
-        self.history = {
-            "train": {"loss": [], "accuracy": []},
-
-            "val": {"loss": [], "accuracy": []},
-        }
-        for metric in training_params.metrics:
-            self.history["train"][metric.name] = []
-            self.history["val"][metric.name] = []
-
-        # -------------------------------
-        # Early stopping state
-        # -------------------------------
-        epochs_without_improvement = 0
-
-        # -------------------------------
-        # Training loop
-        # -------------------------------
-        for epoch in range(1, training_params.epochs + 1):
-            self.train()
-            epoch_loss = 0.0
-
-            for i in range(num_batches):
-                xb = x_train[i * batch_size:(i + 1) * batch_size]
-                yb = y_train[i * batch_size:(i + 1) * batch_size]
-
-                optimizer.zero_grad()
-                logits = self(xb)
-                loss = self.loss_fn(logits, yb)
-                loss.backward()
-                optimizer.step()
-
-                epoch_loss += loss.item() * xb.size(0)
-
-            # -------------------------------
-            # Training metrics
-            # -------------------------------
-            train_loss = epoch_loss / x_train.size(0)
-            self.history["train"]["loss"].append(train_loss)
-
-            self.eval()
-            with torch.no_grad():
-                train_logits = self(x_train)
-                train_preds = torch.argmax(train_logits, dim=1).cpu().numpy()
-                train_true = y_train.cpu().numpy()
-
-                train_acc = accuracy_score(train_true, train_preds)
-                self.history["train"]["accuracy"].append(train_acc)
-
-                for metric in training_params.metrics:
-                    m_value = metric.function(train_true, train_preds)
-                    self.history["train"][metric.name].append(m_value)
-
-            # -------------------------------
-            # Validation metrics
-            # -------------------------------
-            if x_val is not None:
-                with torch.no_grad():
-                    val_logits = self(x_val)
-                    val_loss = self.loss_fn(val_logits, y_val).item()
-                    self.history["val"]["loss"].append(val_loss)
-
-                    val_preds = torch.argmax(val_logits, dim=1).cpu().numpy()
-                    val_true = y_val.cpu().numpy()
-
-                    val_acc = accuracy_score(val_true, val_preds)
-                    self.history["val"]["accuracy"].append(val_acc)
-
-                    for metric in training_params.metrics:
-                        m_value = metric.function(val_true, val_preds)
-                        self.history["val"][metric.name].append(m_value)
-
-            # -------------------------------
-            # Best model tracking & early stopping
-            # -------------------------------
-            if self.track_best_model and x_val is not None:
-                if val_loss < self.best_val_loss:
-                    self.best_val_loss = val_loss
-                    self.best_epoch = epoch
-                    epochs_without_improvement = 0
-
-                    self.best_metrics = {
-                        "train_loss": train_loss,
-                        "val_loss": val_loss,
-                        "train_accuracy": train_acc,
-                        "val_accuracy": val_acc,
-                    }
-
-                    self.best_state_dict = {
-                        k: v.detach().clone() for k, v in self.state_dict().items()
-                    }
-                else:
-                    epochs_without_improvement += 1
-
-                    if self.early_stopping and epochs_without_improvement >= self.early_stopping_patience:
-                        print(
-                            f"\nEarly stopping triggered at epoch {epoch}. "
-                            f"Best epoch was {self.best_epoch} "
-                            f"(val_loss={self.best_val_loss:.4f})."
-                        )
-                        break
-
-            # -------------------------------
-            # Logging
-            # -------------------------------
-            if epoch % training_params.print_every == 0:
-                train_metrics_str = " | ".join(
-                    [f"{m.name}: {self.history['train'][m.name][-1]:.4f}" for m in training_params.metrics]
-                )
-                val_metrics_str = " | ".join(
-                    [f"{m.name}: {self.history['val'][m.name][-1]:.4f}" for m in training_params.metrics]
-                )
-
-                log_msg = (
-                    f"[Epoch {epoch}/{training_params.epochs}] "
-                    f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | {train_metrics_str}"
-                )
-
-                if x_val is not None:
-                    log_msg += (
-                        f" || Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f} | {val_metrics_str}"
-                    )
-
-                print(log_msg)
-
-
-
-    def recover_best_model(self) -> None:
-        """
-        Recover the best model parameters based on validation loss.
-        """
-        if self.best_state_dict is None:
-            print("No best model stored. Did you enable track_best_model=True?")
-            return
-    
-        self.load_state_dict(self.best_state_dict)
-    
-        print("\nBest model recovered.")
-        print(f"Epoch: {self.best_epoch}")
-        for k, v in self.best_metrics.items():
-            print(f"{k}: {v:.4f}")
-
-
-
-    def visualize_training_history(self):
-        if not hasattr(self, "history") or not self.history:
+    def visualize_training_history(self, index = -1):
+        if self.history is None:
             print("Training history is not available. Call fit() first.")
             return
-        
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-        
-        ax = axes[0]
-        ax.plot(self.history["train"]["loss"], label="Training Loss")
-        ax.plot(self.history["val"]["loss"], label="Validation Loss")
-        ax.set_title("Loss Vs. Epochs")
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Loss")
-        ax.legend()
-        ax.grid(True)
 
-        ax = axes[1]
-        ax.plot(self.history["train"]["accuracy"], label="Training Accuracy")
-        ax.plot(self.history["val"]["accuracy"], label="Validation Accuracy")
-        ax.set_title("Accuracy Vs. Epochs")
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Accuracy")
-        ax.legend()
-        ax.grid(True)
+        history = self.history[index]
+        train, val = history.train, history.val
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        # ---- Loss ----
+        axes[0].plot(train["loss"], label="Train Loss")
+        axes[0].plot(val["loss"], label="Val Loss")
+        axes[0].set_title("Loss vs Epochs")
+        axes[0].legend()
+        axes[0].grid(True)
+
+        # ---- Accuracy ----
+        axes[1].plot(train["accuracy"], label="Train Accuracy")
+        axes[1].plot(val["accuracy"], label="Val Accuracy")
+        axes[1].set_title("Accuracy vs Epochs")
+        axes[1].legend()
+        axes[1].grid(True)
+
+        fig.suptitle(
+            f"{history.phase.upper()} "
+            f"(epochs={history.params.epochs}, "
+            f"lr={history.params.lr})"
+        )
 
         plt.tight_layout()
         plt.show()
+
     # -------------------------------------------
     # PREDICT (classification logic)
     # -------------------------------------------
@@ -284,8 +239,7 @@ class ClassificationModel(BaseModel):
         """
         self.eval()
 
-        device = torch.device(self.device.value)
-        x = x.to(device)
+        x = x.to(self.device)
 
         with torch.no_grad():
             logits = self(x)
@@ -389,3 +343,30 @@ class ClassificationModel(BaseModel):
         model.history = checkpoint.get("history")
 
         return model
+    
+    def _set_trainable_layers(self, layers: Iterable[str]):
+        for name, param in self.named_parameters():
+            param.requires_grad = False
+
+            if layers is None:
+                param.requires_grad = True
+            else:
+                for layer_name in layers:
+                    if name.startswith(layer_name):
+                        param.requires_grad = True
+                        break
+
+    def recover_best_model(self) -> None:
+        """
+        Recover the best model parameters based on validation loss.
+        """
+        if self.best_state_dict is None:
+            print("No best model stored. Did you enable track_best_model=True?")
+            return
+    
+        self.load_state_dict(self.best_state_dict)
+    
+        print("\nBest model recovered.")
+        print(f"Epoch: {self.best_epoch}")
+        for k, v in self.best_metrics.items():
+            print(f"{k}: {v:.4f}")

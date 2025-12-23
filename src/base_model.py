@@ -1,7 +1,7 @@
 import torch
 from abc import ABC, abstractmethod
 from typing import Callable, List
-from configurations import TrainingParams, Task, TrainingHistoryType
+from src.configurations import TrainingParams, Task, TrainingHistoryType
 
 class BaseModel(torch.nn.Module, ABC):
     def __init__(self, task: Task = Task.classification, device: torch.device = torch.device("cpu")):
@@ -32,13 +32,13 @@ class BaseModel(torch.nn.Module, ABC):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         pass
 
-    @abstractmethod
-    def register_loss(self, loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]) -> None:
-        pass
+    # @abstractmethod
+    # def register_loss(self, loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]) -> None:
+    #     pass
 
-    @abstractmethod
-    def register_optimizer(self, optimizer: torch.optim.Optimizer) -> None:
-        pass
+    # @abstractmethod
+    # def register_optimizer(self, optimizer: torch.optim.Optimizer) -> None:
+    #     pass
     
     @abstractmethod
     def fit(self, x: torch.Tensor, y: torch.Tensor, training_params: TrainingParams):
