@@ -1,7 +1,7 @@
 import torch
 from typing import Callable, List, Iterable
-from src.configurations import TrainingParams, Task, TrainingHistory
-from src.base_model import BaseModel
+from .configurations import TrainingParams, Task, TrainingHistory
+from .base_model import BaseModel
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns

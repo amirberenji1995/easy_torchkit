@@ -1,7 +1,7 @@
 import torch
 from abc import ABC, abstractmethod
 from typing import Callable, List
-from src.configurations import TrainingParams, Task, TrainingHistoryType
+from .configurations import TrainingParams, Task, TrainingHistoryType
 
 class BaseModel(torch.nn.Module, ABC):
     def __init__(self, task: Task = Task.classification, device: torch.device = torch.device("cpu")):
