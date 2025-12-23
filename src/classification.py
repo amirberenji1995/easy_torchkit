@@ -163,17 +163,21 @@ class ClassificationModel(BaseModel):
         self.to(self.device)
         x_train, y_train = x_train.to(self.device), y_train.to(self.device)
 
-        loss_fn = training_params.loss_fn()
+        if self.loss_fn is None:
+            raise ValueError("Loss function must be set before calling fit().")
+
+        optimizer_kwargs = training_params.optimizer_params or {}
         optimizer = training_params.optimizer(
             filter(lambda p: p.requires_grad, self.parameters()),
             lr=training_params.lr,
+            **optimizer_kwargs
         )
 
         self._run_training_loop(
             x=x_train,
             y=y_train,
             optimizer=optimizer,
-            loss_fn=loss_fn,
+            loss_fn=self.loss_fn,
             params=training_params,
         )
 
