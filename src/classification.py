@@ -149,6 +149,7 @@ class ClassificationModel(BaseModel):
                     f"[{params.phase.upper()} | Epoch {epoch}/{params.epochs}] "
                     f"Train Loss: {train_loss:.4f} | "
                     f"Val Loss: {val_metrics['loss']:.4f} | "
+                    f"Train Acc: {train_metrics['accuracy']:.4f} | "
                     f"Val Acc: {val_metrics['accuracy']:.4f}"
                 )
 
