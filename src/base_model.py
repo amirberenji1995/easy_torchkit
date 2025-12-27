@@ -174,3 +174,21 @@ class BaseModel(torch.nn.Module, ABC):
 
         for layer_name in layer_names:
             self.unfreeze_layer(layer_name)
+
+    def freeze_up_to(self, layer_name: str) -> None:
+        if self.network is None:
+            raise RuntimeError("Model has no network defined.")
+
+        layer_names = list(self.network._modules.keys())
+
+        if layer_name not in layer_names:
+            raise ValueError(
+                f"Layer '{layer_name}' not found. "
+                f"Available layers: {layer_names}"
+            )
+
+        # Freeze layers from start up to (and including) layer_name
+        index = layer_names.index(layer_name)
+        layers_to_freeze = layer_names[: index + 1]
+
+        self.freeze_layers(layers_to_freeze)
