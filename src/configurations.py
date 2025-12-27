@@ -31,6 +31,7 @@ class TrainingParams(BaseModel):
     optimizer: type[torch.optim.Optimizer] = torch.optim.Adam
     optimizer_params: Optional[Dict[str, Any]] = None
     phase: TrainingPhaseType = TrainingPhaseType.training
+    output_layer: str | None = None
 
 
 class TrainingHistory(BaseModel):

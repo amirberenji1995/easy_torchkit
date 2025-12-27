@@ -52,6 +52,7 @@ class ClassificationModel(BaseModel):
         optimizer: torch.optim.Optimizer,
         loss_fn: Callable,
         batch_size: int,
+        output_layer: str | None = None
     ):
         self.train()
         epoch_loss = 0.0
@@ -66,7 +67,7 @@ class ClassificationModel(BaseModel):
             yb = y_train[i * batch_size:(i + 1) * batch_size]
 
             optimizer.zero_grad()
-            logits = self(xb)
+            logits = self(xb, output_layer=output_layer)
             loss = loss_fn(logits, yb)
             loss.backward()
             optimizer.step()
@@ -112,6 +113,7 @@ class ClassificationModel(BaseModel):
                 optimizer=optimizer,
                 loss_fn=loss_fn,
                 batch_size=params.batch_size,
+                output_layer=params.output_layer
             )
 
             train_metrics = self.evaluate(x_train, y_train)
@@ -218,7 +220,7 @@ class ClassificationModel(BaseModel):
     # -------------------------------------------
     # PREDICT (classification logic)
     # -------------------------------------------
-    def predict(self, x: torch.Tensor) -> torch.Tensor:
+    def predict(self, x: torch.Tensor, output_layer: str | None = None) -> torch.Tensor:
         """
         Predict class labels for input x.
         """
@@ -227,7 +229,7 @@ class ClassificationModel(BaseModel):
         x = x.to(self.device)
 
         with torch.no_grad():
-            logits = self(x)
+            logits = self(x, output_layer=output_layer)
             preds = torch.argmax(logits, dim=1)
 
         return preds.cpu()

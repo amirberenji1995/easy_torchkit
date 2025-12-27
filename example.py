@@ -2,14 +2,19 @@ import torch
 import torch.nn as nn
 from src.classification import ClassificationModel
 from src.configurations import TrainingParams, EvaluationMetric, TrainingPhaseType
+from typing import OrderedDict
 
 class SimpleClassifier(ClassificationModel):
     def __init__(self, input_dim: int, num_classes: int, **kwargs):
         super().__init__(**kwargs)
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, num_classes),
+        self.network = nn.Sequential(
+            OrderedDict(
+                [
+                    ("linear1", nn.Linear(input_dim, 32)),
+                    ("relu1", nn.ReLU()),
+                    ("linear2", nn.Linear(32, num_classes)),
+                ]
+            )
         )
 
         # Required for export/import
@@ -18,9 +23,6 @@ class SimpleClassifier(ClassificationModel):
             "num_classes": num_classes,
             **kwargs,
         }
-
-    def forward(self, x):
-        return self.net(x)
     
 torch.manual_seed(42)
 
