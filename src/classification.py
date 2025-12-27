@@ -9,6 +9,7 @@ sns.set_theme()
 from torchinfo import summary as torchinfo_summary
 from pathlib import Path
 from typing import Any, Dict, Type, TypeVar
+import copy
 
 T = TypeVar("T", bound = "ClassificationModel")
 
@@ -354,3 +355,24 @@ class ClassificationModel(BaseModel):
         print(f"Epoch: {self.best_epoch}")
         for k, v in self.best_metrics.items():
             print(f"{k}: {v:.4f}")
+
+
+    def copy(self, *, reset_history: bool = True, reset_optimizer: bool = True):
+
+        model_copy = copy.deepcopy(self)
+
+        # ---- Optimizer should NOT be copied ----
+        if reset_optimizer:
+            model_copy.optimizer = None
+
+        # ---- History should usually be reset ----
+        if reset_history:
+            model_copy.history = []
+
+        # ---- Best-model tracking reset ----
+        model_copy.best_state_dict = None
+        model_copy.best_epoch = None
+        model_copy.best_metrics = None
+        model_copy.best_val_loss = float("inf")
+
+        return model_copy
