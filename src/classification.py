@@ -330,18 +330,6 @@ class ClassificationModel(BaseModel):
         model.history = checkpoint.get("history")
 
         return model
-    
-    def _set_trainable_layers(self, layers: Iterable[str]):
-        for name, param in self.named_parameters():
-            param.requires_grad = False
-
-            if layers is None:
-                param.requires_grad = True
-            else:
-                for layer_name in layers:
-                    if name.startswith(layer_name):
-                        param.requires_grad = True
-                        break
 
     def recover_best_model(self) -> None:
         """

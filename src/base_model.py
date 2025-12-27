@@ -1,6 +1,6 @@
 import torch
 from abc import ABC, abstractmethod
-from typing import Callable, List
+from typing import Callable, List, Literal
 from .configurations import TrainingParams, Task, TrainingHistoryType
 
 
@@ -112,3 +112,65 @@ class BaseModel(torch.nn.Module, ABC):
     @abstractmethod
     def import_(cls, path: str):
         pass
+    
+    from typing import List, Literal
+
+
+    def freeze_layer(self, layer_name: str) -> None:
+        if self.network is None:
+            raise RuntimeError("Model has no network defined.")
+
+        found = False
+        for name, param in self.named_parameters():
+            if name.startswith(f"network.{layer_name}."):
+                param.requires_grad = False
+                found = True
+
+        if not found:
+            raise ValueError(
+                f"Layer '{layer_name}' not found. "
+                f"Available layers: {list(self.network._modules.keys())}"
+            )
+
+
+    def freeze_layers(self, layer_names: List[str] | Literal["all"] = "all") -> None:
+        if self.network is None:
+            raise RuntimeError("Model has no network defined.")
+
+        if layer_names == "all":
+            for param in self.network.parameters():
+                param.requires_grad = False
+            return
+
+        for layer_name in layer_names:
+            self.freeze_layer(layer_name)
+
+
+    def unfreeze_layer(self, layer_name: str) -> None:
+        if self.network is None:
+            raise RuntimeError("Model has no network defined.")
+
+        found = False
+        for name, param in self.named_parameters():
+            if name.startswith(f"network.{layer_name}."):
+                param.requires_grad = True
+                found = True
+
+        if not found:
+            raise ValueError(
+                f"Layer '{layer_name}' not found. "
+                f"Available layers: {list(self.network._modules.keys())}"
+            )
+
+
+    def unfreeze_layers(self, layer_names: List[str] | Literal["all"] = "all") -> None:
+        if self.network is None:
+            raise RuntimeError("Model has no network defined.")
+
+        if layer_names == "all":
+            for param in self.network.parameters():
+                param.requires_grad = True
+            return
+
+        for layer_name in layer_names:
+            self.unfreeze_layer(layer_name)
