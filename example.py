@@ -39,13 +39,13 @@ accuracy_metric = EvaluationMetric(
 )
 
 training_params = TrainingParams(
-    epochs=20,
-    lr=1e-3,
-    batch_size=64,
-    val_size=0.2,
-    print_every=2,
-    metrics=[accuracy_metric],
-    phase=TrainingPhaseType.training,
+    epochs=50,
+    lr=0.001,
+    batch_size="full",
+    val_size=0.25,
+    print_every=10,
+    optimizer=torch.optim.Adam,
+    optimizer_params={"weight_decay": 0.001, "betas": (0.9, 0.999)}
 )
 
 
