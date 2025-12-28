@@ -2,6 +2,8 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Callable, List, Literal
 from .configurations import TrainingParams, Task, TrainingHistoryType
+import copy
+
 
 
 class BaseModel(torch.nn.Module, ABC):
@@ -192,3 +194,23 @@ class BaseModel(torch.nn.Module, ABC):
         layers_to_freeze = layer_names[: index + 1]
 
         self.freeze_layers(layers_to_freeze)
+
+    def copy(self, *, reset_history: bool = True, reset_optimizer: bool = True):
+
+        model_copy = copy.deepcopy(self)
+
+        # ---- Optimizer should NOT be copied ----
+        if reset_optimizer:
+            model_copy.optimizer = None
+
+        # ---- History should usually be reset ----
+        if reset_history:
+            model_copy.history = []
+
+        # ---- Best-model tracking reset ----
+        model_copy.best_state_dict = None
+        model_copy.best_epoch = None
+        model_copy.best_metrics = None
+        model_copy.best_val_loss = float("inf")
+
+        return model_copy
