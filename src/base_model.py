@@ -1,16 +1,20 @@
 import torch
 from abc import ABC, abstractmethod
-from typing import Callable, List, Literal
-from .configurations import TrainingParams, Task, TrainingHistoryType
+from typing import Callable, List, TypeVar, Literal, Type
+from .configurations import TrainingParams, Task, TrainingHistory, TrainingHistoryType
 import copy
+from pathlib import Path
 
-
+T = TypeVar("T", bound="BaseModel")
 
 class BaseModel(torch.nn.Module, ABC):
     def __init__(
         self,
         task: Task = Task.classification,
         device: torch.device = torch.device("cpu"),
+        track_best_model: bool = True,
+        early_stopping: bool = True,
+        early_stopping_patience: int = 50
     ):
         super().__init__()
 
@@ -21,21 +25,21 @@ class BaseModel(torch.nn.Module, ABC):
         self.network: torch.nn.Sequential | None = None
 
         # ---- TRAINING STATE ----
-        self.loss_fn: Callable | None = None
-        self.optimizer: torch.optim.Optimizer | None = None
-        self.training_history: dict | None = None
+        self.history: List[TrainingHistory] =[]
         self.metrics: List | None = None
 
         # ---- BEST MODEL TRACKING ----
-        self.track_best_model = True
+        self.track_best_model = track_best_model
         self.best_state_dict = None
         self.best_epoch = None
         self.best_metrics = None
         self.best_val_loss = float("inf")
 
         # ---- EARLY STOPPING ----
-        self.early_stopping = True
-        self.early_stopping_patience = 50
+        self.early_stopping = early_stopping
+        self.early_stopping_patience = early_stopping_patience
+
+        self.init_params: dict = {}
 
     # ------------------------------------------------------------------
     # GENERIC FORWARD (LAYER-AWARE)
@@ -88,10 +92,6 @@ class BaseModel(torch.nn.Module, ABC):
         pass
 
     @abstractmethod
-    def recover_best_model(self) -> None:
-        pass
-
-    @abstractmethod
     def visualize_training_history(
         self,
         history: TrainingHistoryType = TrainingHistoryType.training_history,
@@ -105,19 +105,7 @@ class BaseModel(torch.nn.Module, ABC):
     @abstractmethod
     def evaluate(self, x: torch.Tensor, y: torch.Tensor):
         pass
-
-    @abstractmethod
-    def export(self, path: str) -> None:
-        pass
-
-    @classmethod
-    @abstractmethod
-    def import_(cls, path: str):
-        pass
     
-    from typing import List, Literal
-
-
     def freeze_layer(self, layer_name: str) -> None:
         if self.network is None:
             raise RuntimeError("Model has no network defined.")
@@ -214,3 +202,71 @@ class BaseModel(torch.nn.Module, ABC):
         model_copy.best_val_loss = float("inf")
 
         return model_copy
+    
+    def export(self, path: str | Path) -> None:
+        """
+        Save the model and metadata to disk (PyTorch 2.6+ safe).
+        """
+        path = Path(path)
+
+        checkpoint = {
+            "class_name": self.__class__.__name__,
+            "state_dict": self.state_dict(),
+            "init_params": self.init_params,
+            "task": self.task.name if isinstance(self.task, Task) else str(self.task),
+            "best_state_dict": self.best_state_dict,
+            "best_epoch": self.best_epoch,
+            "best_metrics": self.best_metrics,
+            "best_val_loss": self.best_val_loss,
+            "history": self.history,
+        }
+
+        torch.save(checkpoint, path)
+
+    @classmethod
+    def import_(
+        cls: Type[T],
+        path: str | Path,
+        device: torch.device | str = "cpu",
+    ) -> T:
+        """
+        Load a model from disk and restore its metadata.
+        """
+        path = Path(path)
+        checkpoint = torch.load(path, map_location=device)
+
+        # ---- Rebuild model ----
+        init_params = checkpoint.get("init_params", {})
+        model = cls(**init_params)
+
+        model.load_state_dict(checkpoint["state_dict"])
+        model.to(device)
+
+        # ---- Restore metadata ----
+        task_name = checkpoint.get("task")
+        if task_name:
+            model.task = Task[task_name] if isinstance(task_name, str) else task_name
+
+        model.best_state_dict = checkpoint.get("best_state_dict")
+        model.best_epoch = checkpoint.get("best_epoch")
+        model.best_metrics = checkpoint.get("best_metrics")
+        model.best_val_loss = checkpoint.get("best_val_loss")
+        model.history = checkpoint.get("history", [])
+
+        return model
+
+    def recover_best_model(self) -> None:
+        """
+        Restore the best-performing model (by validation loss).
+        """
+        if self.best_state_dict is None:
+            print("No best model stored.")
+            return
+
+        self.load_state_dict(self.best_state_dict)
+
+        print("\n✔ Best model recovered")
+        print(f"Epoch: {self.best_epoch}")
+        if self.best_metrics:
+            for k, v in self.best_metrics.items():
+                print(f"{k}: {v:.4f}")

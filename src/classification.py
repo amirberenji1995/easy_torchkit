@@ -15,31 +15,9 @@ T = TypeVar("T", bound = "ClassificationModel")
 
 
 class ClassificationModel(BaseModel):
-    """
-    A concrete base class for classification tasks.
-    Subclasses must still implement:
-        - forward()
-    """
 
     def __init__(self, device: torch.device = torch.device("cpu"), track_best_model=True, early_stopping=True, early_stopping_patience=500):
-        super(ClassificationModel, self).__init__(task=Task.classification, device=device)
-        self.loss_fn: Callable | None = None
-        self.optimizer: torch.optim.Optimizer | None = None
-        self.history: List[TrainingHistory] =[]
-        self.metrics: List | None = None
-        
-        self.track_best_model = track_best_model
-        self.best_state_dict = None
-        self.best_epoch = None
-        self.best_metrics = None
-        self.best_val_loss = float("inf")
-
-        self.early_stopping = early_stopping
-        self.early_stopping_patience = early_stopping_patience
-
-    # -------------------------------------------
-    # REGISTER LOSS
-    # -------------------------------------------
+        super(ClassificationModel, self).__init__(task=Task.classification, device=device, track_best_model=track_best_model, early_stopping=early_stopping, early_stopping_patience=early_stopping_patience)
 
     def summary(self, input_size, **kwargs):
         return torchinfo_summary(self, input_size, **kwargs)
@@ -278,70 +256,3 @@ class ClassificationModel(BaseModel):
 
         return results
     
-    def export(self, path: str | Path) -> None:
-        """
-        Save the model and metadata to disk in a safe way (PyTorch 2.6+ compatible).
-        """
-        path = Path(path)
-
-        init_params: Dict[str, Any] = getattr(self, "init_params", {})
-
-        checkpoint = {
-            "class_name": self.__class__.__name__,
-            "state_dict": self.state_dict(),
-            "init_params": init_params,
-            "task": self.task.name if isinstance(self.task, Task) else str(self.task),
-            "best_state_dict": self.best_state_dict,
-            "best_epoch": self.best_epoch,
-            "best_metrics": self.best_metrics,
-            "best_val_loss": self.best_val_loss,
-            "history": getattr(self, "history", None),
-        }
-
-        torch.save(checkpoint, path)
-
-    # -------------------------------------------
-    # IMPORT (LOAD) — PyTorch 2.6+ safe
-    # -------------------------------------------
-    @classmethod
-    def import_(cls: Type[T], path: str | Path, device: torch.device | str = "cpu") -> T:
-        """
-        Load a model from disk, reconstructing the instance and metadata.
-        """
-        path = Path(path)
-        checkpoint = torch.load(path, map_location=device)
-
-        # Reconstruct the model instance
-        init_params: Dict[str, Any] = checkpoint.get("init_params", {})
-        model = cls(**init_params)
-
-        # Load weights
-        model.load_state_dict(checkpoint["state_dict"])
-        model.to(device)
-
-        # Restore metadata
-        task_name = checkpoint.get("task", "classification")
-        model.task = Task[task_name] if hasattr(Task, task_name) else task_name
-
-        model.best_state_dict = checkpoint.get("best_state_dict")
-        model.best_epoch = checkpoint.get("best_epoch")
-        model.best_metrics = checkpoint.get("best_metrics")
-        model.best_val_loss = checkpoint.get("best_val_loss")
-        model.history = checkpoint.get("history")
-
-        return model
-
-    def recover_best_model(self) -> None:
-        """
-        Recover the best model parameters based on validation loss.
-        """
-        if self.best_state_dict is None:
-            print("No best model stored. Did you enable track_best_model=True?")
-            return
-    
-        self.load_state_dict(self.best_state_dict)
-    
-        print("\nBest model recovered.")
-        print(f"Epoch: {self.best_epoch}")
-        for k, v in self.best_metrics.items():
-            print(f"{k}: {v:.4f}")
