@@ -1,52 +1,104 @@
 import torch
 from typing import Callable
+
+from src.utils import ContrastiveLoss, supervised_step
 from .configurations import TrainingParams, Task, TrainingHistory, TrainingPhaseType
 from .base_model import BaseModel
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
-sns.set_theme()
 from torchinfo import summary as torchinfo_summary
 
-class ClassificationModel(BaseModel):
+sns.set_theme()
 
-    def __init__(self, device: torch.device = torch.device("cpu"), track_best_model=True, early_stopping=True, early_stopping_patience=500):
-        super(ClassificationModel, self).__init__(task=Task.classification, device=device, track_best_model=track_best_model, early_stopping=early_stopping, early_stopping_patience=early_stopping_patience)
+
+class ClassificationModel(BaseModel):
+    def __init__(
+        self,
+        device: torch.device = torch.device("cpu"),
+        track_best_model=True,
+        early_stopping=True,
+        early_stopping_patience=500,
+    ):
+        super(ClassificationModel, self).__init__(
+            task=Task.classification,
+            device=device,
+            track_best_model=track_best_model,
+            early_stopping=early_stopping,
+            early_stopping_patience=early_stopping_patience,
+        )
 
     def summary(self, input_size, **kwargs):
         return torchinfo_summary(self, input_size, **kwargs)
 
-    def _train_one_epoch(
+    def _run_one_epoch(
         self,
-        x_train: torch.Tensor,
-        y_train: torch.Tensor,
+        x: torch.Tensor,
+        y: torch.Tensor,
         *,
         optimizer: torch.optim.Optimizer,
         loss_fn: Callable,
         batch_size: int,
-        output_layer: str | None = None
-    ):
+        training_step: Callable,
+        output_layer: str | None,
+    ) -> float:
         self.train()
         epoch_loss = 0.0
 
         if batch_size == "full":
-            batch_size = x_train.size(0)
+            batch_size = x.size(0)
 
-        num_batches = (x_train.size(0) + batch_size - 1) // batch_size
+        num_batches = (x.size(0) + batch_size - 1) // batch_size
 
+        all_logits = []
         for i in range(num_batches):
-            xb = x_train[i * batch_size:(i + 1) * batch_size]
-            yb = y_train[i * batch_size:(i + 1) * batch_size]
+            xb = x[i * batch_size : (i + 1) * batch_size]
+            yb = y[i * batch_size : (i + 1) * batch_size]
 
-            optimizer.zero_grad()
-            logits = self(xb, output_layer=output_layer)
-            loss = loss_fn(logits, yb)
-            loss.backward()
-            optimizer.step()
+            loss, logits = training_step(
+                model=self,
+                xb=xb,
+                yb=yb,
+                optimizer=optimizer,
+                loss_fn=loss_fn,
+                output_layer=output_layer,
+            )
 
-            epoch_loss += loss.item() * xb.size(0)
+            epoch_loss += loss * xb.size(0)
+            all_logits.append(logits)
 
-        return epoch_loss / x_train.size(0)
+        all_logits = torch.cat(all_logits, dim=0)
+        return epoch_loss / x.size(0), all_logits
+
+    def _compute_metrics(
+        self,
+        logits: torch.Tensor,
+        y: torch.Tensor,
+        loss_fn: Callable,
+        params: TrainingParams,
+    ):
+        """Compute loss and metrics based on logits and y."""
+
+        if isinstance(loss_fn, ContrastiveLoss):
+            # embeddings are concatenated for contrastive loss
+            z1, z2 = logits.chunk(2, dim=0)
+            loss = loss_fn(z1, z2, y)
+            preds = None
+        else:
+            # Flatten extra dimensions if needed
+            if logits.ndim > 2:
+                logits = logits.view(logits.size(0), -1)  # ensure [batch, num_classes]
+            preds = logits.argmax(dim=1)
+            loss = loss_fn(logits, y)
+
+        metrics_dict = {"loss": loss.item()}
+        if params.metrics and preds is not None:
+            for metric in params.metrics:
+                metrics_dict[metric.name] = metric.function(
+                    y.cpu().numpy(), preds.cpu().numpy()
+                )
+
+        return metrics_dict
 
     def _run_training_loop(
         self,
@@ -63,9 +115,10 @@ class ClassificationModel(BaseModel):
 
         # Train / Val split
         x_train, x_val, y_train, y_val = train_test_split(
-            x.cpu(), y.cpu(),
+            x.cpu(),
+            y.cpu(),
             test_size=params.val_size,
-            stratify=y.cpu()
+            stratify=y.cpu() if y.ndim == 1 else None,
         )
         x_train, y_train = x_train.to(self.device), y_train.to(self.device)
         x_val, y_val = x_val.to(self.device), y_val.to(self.device)
@@ -79,31 +132,29 @@ class ClassificationModel(BaseModel):
         patience_counter = 0
 
         for epoch in range(1, params.epochs + 1):
-            train_loss = self._train_one_epoch(
-                x_train=x_train,
-                y_train=y_train,
+            # Run one epoch using the provided training_step
+            epoch_loss, epoch_logits = self._run_one_epoch(
+                x_train,
+                y_train,
                 optimizer=optimizer,
                 loss_fn=loss_fn,
                 batch_size=params.batch_size,
-                output_layer=params.output_layer
+                output_layer=params.output_layer,
+                training_step=params.training_step,
             )
 
-            train_metrics = self.evaluate(x_train, y_train)
-            val_metrics = self.evaluate(x_val, y_val)
+            # Compute loss and metrics via a helper function
+            train_metrics = self._compute_metrics(
+                epoch_logits, y_train, loss_fn, params
+            )
 
-            current_history.log_train({
-                "loss": train_loss,
-                "accuracy": train_metrics["accuracy"],
-                **{k: v for k, v in train_metrics.items() if k not in ["loss", "accuracy"]},
-            })
+            val_logits = self(x_val, output_layer=params.output_layer)
+            val_metrics = self._compute_metrics(val_logits, y_val, loss_fn, params)
 
-            current_history.log_val({
-                "loss": val_metrics["loss"],
-                "accuracy": val_metrics["accuracy"],
-                **{k: v for k, v in val_metrics.items() if k not in ["loss", "accuracy"]},
-            })
+            current_history.log_train(train_metrics)
+            current_history.log_val(val_metrics)
 
-            # Best model tracking
+            # --- Best model tracking ---
             if self.track_best_model and val_metrics["loss"] < self.best_val_loss:
                 self.best_val_loss = val_metrics["loss"]
                 self.best_state_dict = {
@@ -119,36 +170,42 @@ class ClassificationModel(BaseModel):
                 print(f"\n⏹ Early stopping at epoch {epoch}")
                 break
 
+            # --- Print logging ---
             if epoch % params.print_every == 0:
+                metrics_str = " | ".join(
+                    [
+                        f"Train {m.name}: {train_metrics[m.name]:.4f} | Val {m.name}: {val_metrics[m.name]:.4f}"
+                        for m in params.metrics
+                    ]
+                    if params.metrics
+                    else []
+                )
                 print(
                     f"[{params.phase.upper()} | Epoch {epoch}/{params.epochs}] "
-                    f"Train Loss: {train_loss:.4f} | "
-                    f"Val Loss: {val_metrics['loss']:.4f} | "
-                    f"Train Acc: {train_metrics['accuracy']:.4f} | "
-                    f"Val Acc: {val_metrics['accuracy']:.4f}"
+                    f"Train Loss: {train_metrics['loss']:.4f} | Val Loss: {val_metrics['loss']:.4f}"
+                    + (f" | {metrics_str}" if metrics_str else "")
                 )
-
 
     def fit(
         self,
-        x_train: torch.Tensor,
-        y_train: torch.Tensor,
+        x: torch.Tensor,
+        y: torch.Tensor,
         training_params: TrainingParams,
     ):
         self.to(self.device)
-        x_train, y_train = x_train.to(self.device), y_train.to(self.device)
+        x, y = x.to(self.device), y.to(self.device)
 
         optimizer = self._optimizer_creator(training_params)
 
         self._run_training_loop(
-            x=x_train,
-            y=y_train,
+            x=x,
+            y=y,
             optimizer=optimizer,
-            loss_fn=self.loss_fn,
+            loss_fn=training_params.loss_fn,
             params=training_params,
         )
 
-    def visualize_training_history(self, index = -1):
+    def visualize_training_history(self, index=-1):
         if self.history is None:
             print("Training history is not available. Call fit() first.")
             return
@@ -241,9 +298,18 @@ class ClassificationModel(BaseModel):
         results.update(metrics_dict)
 
         return results
-    
-    def fine_tune(self, x: torch.Tensor, y: torch.Tensor, training_params: TrainingParams, *, reset_best: bool = True):
-        training_params = training_params.model_copy(update = {"phase": TrainingPhaseType.fine_tuning})
+
+    def fine_tune(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        training_params: TrainingParams,
+        *,
+        reset_best: bool = True,
+    ):
+        training_params = training_params.model_copy(
+            update={"phase": TrainingPhaseType.fine_tuning}
+        )
 
         if reset_best:
             self.best_state_dict = None
@@ -251,15 +317,4 @@ class ClassificationModel(BaseModel):
             self.best_metrics = None
             self.best_val_loss = float("inf")
 
-        self.to(self.device)
-        x, y = x.to(self.device), y.to(self.device)
-
-        optimizer = self._optimizer_creator(training_params)
-
-        self._run_training_loop(
-            x=x,
-            y=y,
-            optimizer=optimizer,
-            loss_fn=self.loss_fn,
-            params=training_params,
-        )
+        self.fit(x, y, training_params)

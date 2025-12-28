@@ -1,11 +1,12 @@
 import torch
 from abc import ABC, abstractmethod
-from typing import Callable, List, TypeVar, Literal, Type
+from typing import List, TypeVar, Literal, Type
 from .configurations import TrainingParams, Task, TrainingHistory, TrainingHistoryType
 import copy
 from pathlib import Path
 
 T = TypeVar("T", bound="BaseModel")
+
 
 class BaseModel(torch.nn.Module, ABC):
     def __init__(
@@ -14,7 +15,7 @@ class BaseModel(torch.nn.Module, ABC):
         device: torch.device = torch.device("cpu"),
         track_best_model: bool = True,
         early_stopping: bool = True,
-        early_stopping_patience: int = 50
+        early_stopping_patience: int = 50,
     ):
         super().__init__()
 
@@ -25,7 +26,7 @@ class BaseModel(torch.nn.Module, ABC):
         self.network: torch.nn.Sequential | None = None
 
         # ---- TRAINING STATE ----
-        self.history: List[TrainingHistory] =[]
+        self.history: List[TrainingHistory] = []
         self.metrics: List | None = None
 
         # ---- BEST MODEL TRACKING ----
@@ -76,7 +77,6 @@ class BaseModel(torch.nn.Module, ABC):
 
         return x
 
-    
     @abstractmethod
     def summary(self, input_size, **kwargs):
         pass
@@ -99,7 +99,7 @@ class BaseModel(torch.nn.Module, ABC):
     @abstractmethod
     def evaluate(self, x: torch.Tensor, y: torch.Tensor):
         pass
-    
+
     def freeze_layer(self, layer_name: str) -> None:
         if self.network is None:
             raise RuntimeError("Model has no network defined.")
@@ -116,7 +116,6 @@ class BaseModel(torch.nn.Module, ABC):
                 f"Available layers: {list(self.network._modules.keys())}"
             )
 
-
     def freeze_layers(self, layer_names: List[str] | Literal["all"] = "all") -> None:
         if self.network is None:
             raise RuntimeError("Model has no network defined.")
@@ -128,7 +127,6 @@ class BaseModel(torch.nn.Module, ABC):
 
         for layer_name in layer_names:
             self.freeze_layer(layer_name)
-
 
     def unfreeze_layer(self, layer_name: str) -> None:
         if self.network is None:
@@ -145,7 +143,6 @@ class BaseModel(torch.nn.Module, ABC):
                 f"Layer '{layer_name}' not found. "
                 f"Available layers: {list(self.network._modules.keys())}"
             )
-
 
     def unfreeze_layers(self, layer_names: List[str] | Literal["all"] = "all") -> None:
         if self.network is None:
@@ -167,8 +164,7 @@ class BaseModel(torch.nn.Module, ABC):
 
         if layer_name not in layer_names:
             raise ValueError(
-                f"Layer '{layer_name}' not found. "
-                f"Available layers: {layer_names}"
+                f"Layer '{layer_name}' not found. Available layers: {layer_names}"
             )
 
         # Freeze layers from start up to (and including) layer_name
@@ -178,7 +174,6 @@ class BaseModel(torch.nn.Module, ABC):
         self.freeze_layers(layers_to_freeze)
 
     def copy(self, *, reset_history: bool = True, reset_optimizer: bool = True):
-
         model_copy = copy.deepcopy(self)
 
         # ---- Optimizer should NOT be copied ----
@@ -196,7 +191,7 @@ class BaseModel(torch.nn.Module, ABC):
         model_copy.best_val_loss = float("inf")
 
         return model_copy
-    
+
     def export(self, path: str | Path) -> None:
         """
         Save the model and metadata to disk (PyTorch 2.6+ safe).
@@ -265,11 +260,13 @@ class BaseModel(torch.nn.Module, ABC):
             for k, v in self.best_metrics.items():
                 print(f"{k}: {v:.4f}")
 
-    def _optimizer_creator(self, training_params: TrainingParams) -> torch.optim.Optimizer:
+    def _optimizer_creator(
+        self, training_params: TrainingParams
+    ) -> torch.optim.Optimizer:
         optimizer_kwargs = training_params.optimizer_params or {}
 
         return training_params.optimizer(
             filter(lambda p: p.requires_grad, self.parameters()),
             lr=training_params.lr,
-            **optimizer_kwargs
+            **optimizer_kwargs,
         )

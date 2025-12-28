@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from enum import StrEnum
 from typing import Callable, List, Literal, Dict, Optional, Any
 import torch
+from src.utils import supervised_step
 
 class Task(StrEnum):
     classification = 'classification'
@@ -18,6 +19,7 @@ class EvaluationMetric(BaseModel):
 class TrainingPhaseType(StrEnum):
     training="training"
     fine_tuning="fine_tuning"
+    pre_training="pre_training"
 
 
 class TrainingParams(BaseModel):
@@ -32,6 +34,7 @@ class TrainingParams(BaseModel):
     optimizer_params: Optional[Dict[str, Any]] = None
     phase: TrainingPhaseType = TrainingPhaseType.training
     output_layer: str | None = None
+    training_step: Callable = supervised_step
 
 
 class TrainingHistory(BaseModel):

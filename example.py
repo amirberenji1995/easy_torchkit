@@ -1,8 +1,11 @@
 import torch
 import torch.nn as nn
-from src.classification import ClassificationModel
-from src.configurations import TrainingParams, EvaluationMetric, TrainingPhaseType
+from src.classification import ClassificationModel, TrainingPhaseType
+from src.configurations import TrainingParams, EvaluationMetric
 from typing import OrderedDict
+from sklearn.metrics import accuracy_score
+from src.utils import supervised_step
+
 
 class SimpleClassifier(ClassificationModel):
     def __init__(self, input_dim: int, num_classes: int, **kwargs):
@@ -23,7 +26,8 @@ class SimpleClassifier(ClassificationModel):
             "num_classes": num_classes,
             **kwargs,
         }
-    
+
+
 torch.manual_seed(42)
 
 N = 1000
@@ -34,20 +38,26 @@ X = torch.randn(N, input_dim)
 y = torch.randint(0, num_classes, (N,))
 
 
-
 accuracy_metric = EvaluationMetric(
     name="accuracy",
-    function=lambda y_true, y_pred: (y_true == y_pred).mean(),
+    function=accuracy_score,
 )
 
+lr = 0.001
+epochs = 50
+
 training_params = TrainingParams(
-    epochs=50,
-    lr=0.001,
+    epochs=epochs,
+    lr=lr,
     batch_size="full",
     val_size=0.25,
     print_every=10,
+    metrics=[accuracy_metric],
+    loss_fn=torch.nn.CrossEntropyLoss(),
     optimizer=torch.optim.Adam,
-    optimizer_params={"weight_decay": 0.001, "betas": (0.9, 0.999)}
+    optimizer_params={"weight_decay": lr / epochs},
+    training_step=supervised_step,
+    phase=TrainingPhaseType.training,
 )
 
 
@@ -74,3 +84,10 @@ print("Sample predictions:", preds)
 model.visualize_training_history()
 
 model.evaluate(X, y)
+
+
+model.fine_tune(X, y, training_params)
+
+model.evaluate(X, y)
+
+model.visualize_training_history()
