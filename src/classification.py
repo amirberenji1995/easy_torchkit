@@ -1,18 +1,12 @@
 import torch
-from typing import Callable, List, Iterable
-from .configurations import TrainingParams, Task, TrainingHistory
+from typing import Callable
+from .configurations import TrainingParams, Task, TrainingHistory, TrainingPhaseType
 from .base_model import BaseModel
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set_theme()
 from torchinfo import summary as torchinfo_summary
-from pathlib import Path
-from typing import Any, Dict, Type, TypeVar
-
-
-T = TypeVar("T", bound = "ClassificationModel")
-
 
 class ClassificationModel(BaseModel):
 
@@ -144,15 +138,7 @@ class ClassificationModel(BaseModel):
         self.to(self.device)
         x_train, y_train = x_train.to(self.device), y_train.to(self.device)
 
-        if self.loss_fn is None:
-            raise ValueError("Loss function must be set before calling fit().")
-
-        optimizer_kwargs = training_params.optimizer_params or {}
-        optimizer = training_params.optimizer(
-            filter(lambda p: p.requires_grad, self.parameters()),
-            lr=training_params.lr,
-            **optimizer_kwargs
-        )
+        optimizer = self._optimizer_creator(training_params)
 
         self._run_training_loop(
             x=x_train,
@@ -256,3 +242,24 @@ class ClassificationModel(BaseModel):
 
         return results
     
+    def fine_tune(self, x: torch.Tensor, y: torch.Tensor, training_params: TrainingParams, *, reset_best: bool = True):
+        training_params = training_params.model_copy(update = {"phase": TrainingPhaseType.fine_tuning})
+
+        if reset_best:
+            self.best_state_dict = None
+            self.best_epoch = None
+            self.best_metrics = None
+            self.best_val_loss = float("inf")
+
+        self.to(self.device)
+        x, y = x.to(self.device), y.to(self.device)
+
+        optimizer = self._optimizer_creator(training_params)
+
+        self._run_training_loop(
+            x=x,
+            y=y,
+            optimizer=optimizer,
+            loss_fn=self.loss_fn,
+            params=training_params,
+        )

@@ -41,9 +41,6 @@ class BaseModel(torch.nn.Module, ABC):
 
         self.init_params: dict = {}
 
-    # ------------------------------------------------------------------
-    # GENERIC FORWARD (LAYER-AWARE)
-    # ------------------------------------------------------------------
     def forward(
         self,
         x: torch.Tensor,
@@ -79,10 +76,7 @@ class BaseModel(torch.nn.Module, ABC):
 
         return x
 
-    # ------------------------------------------------------------------
-    # ABSTRACT API (TASK-SPECIFIC)
-    # ------------------------------------------------------------------
-
+    
     @abstractmethod
     def summary(self, input_size, **kwargs):
         pass
@@ -270,3 +264,12 @@ class BaseModel(torch.nn.Module, ABC):
         if self.best_metrics:
             for k, v in self.best_metrics.items():
                 print(f"{k}: {v:.4f}")
+
+    def _optimizer_creator(self, training_params: TrainingParams) -> torch.optim.Optimizer:
+        optimizer_kwargs = training_params.optimizer_params or {}
+
+        return training_params.optimizer(
+            filter(lambda p: p.requires_grad, self.parameters()),
+            lr=training_params.lr,
+            **optimizer_kwargs
+        )
