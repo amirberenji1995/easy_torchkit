@@ -3,7 +3,6 @@ from typing import List, Callable, Dict
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
-from torchinfo import summary as torchinfo_summary
 from .base_model import BaseTaskModel
 from .utils import ContrastiveLoss
 from .configurations import Task, TrainingParams, EvaluationMetric, TrainingPhaseType
@@ -26,9 +25,6 @@ class ClassificationModel(BaseTaskModel):
             early_stopping,
             early_stopping_patience,
         )
-
-    def summary(self, input_size, **kwargs):
-        return torchinfo_summary(self, input_size, **kwargs)
 
     def _run_evaluation_pass(
         self, x: torch.Tensor, output_layer: str | None = None

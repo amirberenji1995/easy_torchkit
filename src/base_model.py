@@ -1,7 +1,8 @@
 import torch
+from torchinfo import summary as torchinfo_summary
 import copy
 from abc import ABC, abstractmethod
-from typing import List, TypeVar, Literal, Type, Dict, Any, Callable
+from typing import List, TypeVar, Literal, Type, Dict, Callable
 from pathlib import Path
 from .configurations import TrainingParams, Task, TrainingHistory
 
@@ -58,9 +59,8 @@ class BaseTaskModel(torch.nn.Module, ABC):
     ) -> Dict[str, float]:
         pass
 
-    @abstractmethod
     def summary(self, input_size, **kwargs):
-        pass
+        return torchinfo_summary(self, input_size, **kwargs)
 
     def _run_evaluation_pass(
         self, x: torch.Tensor, output_layer: str | None = None
@@ -216,10 +216,21 @@ class BaseTaskModel(torch.nn.Module, ABC):
     def unfreeze_layers(self, names="all"):
         self.set_layers_grad(names, True)
 
-    def recover_best_model(self):
-        if self.best_state_dict:
-            self.load_state_dict(self.best_state_dict)
-            print("✔ Best model recovered")
+    def recover_best_model(self) -> None:
+        """
+        Restore the best-performing model (by validation loss).
+        """
+        if self.best_state_dict is None:
+            print("No best model stored.")
+            return
+
+        self.load_state_dict(self.best_state_dict)
+
+        print("\n✔ Best model recovered")
+        print(f"Epoch: {self.best_epoch}")
+        if self.best_metrics:
+            for k, v in self.best_metrics.items():
+                print(f"{k}: {v:.4f}")
 
     def _optimizer_creator(self, params: TrainingParams):
         return params.optimizer(
@@ -227,3 +238,71 @@ class BaseTaskModel(torch.nn.Module, ABC):
             lr=params.lr,
             **(params.optimizer_params or {}),
         )
+
+    @classmethod
+    def import_(
+        cls: Type[T],
+        path: str | Path,
+        device: torch.device | str = "cpu",
+    ) -> T:
+        """
+        Load a model from disk and restore its metadata.
+        """
+        path = Path(path)
+        checkpoint = torch.load(path, map_location=device)
+
+        # ---- Rebuild model ----
+        init_params = checkpoint.get("init_params", {})
+        model = cls(**init_params)
+
+        model.load_state_dict(checkpoint["state_dict"])
+        model.to(device)
+
+        # ---- Restore metadata ----
+        task_name = checkpoint.get("task")
+        if task_name:
+            model.task = Task[task_name] if isinstance(task_name, str) else task_name
+
+        model.best_state_dict = checkpoint.get("best_state_dict")
+        model.best_epoch = checkpoint.get("best_epoch")
+        model.best_metrics = checkpoint.get("best_metrics")
+        model.best_val_loss = checkpoint.get("best_val_loss")
+        model.history = checkpoint.get("history", [])
+
+        return model
+
+    def export(self, path: str | Path) -> None:
+        """
+        Save the model and metadata to disk (PyTorch 2.6+ safe).
+        """
+        path = Path(path)
+
+        checkpoint = {
+            "class_name": self.__class__.__name__,
+            "state_dict": self.state_dict(),
+            "init_params": self.init_params,
+            "task": self.task.name if isinstance(self.task, Task) else str(self.task),
+            "best_state_dict": self.best_state_dict,
+            "best_epoch": self.best_epoch,
+            "best_metrics": self.best_metrics,
+            "best_val_loss": self.best_val_loss,
+            "history": self.history,
+        }
+
+        torch.save(checkpoint, path)
+
+    def copy(self, *, reset_history: bool = True, reset_optimizer: bool = True):
+        model_copy = copy.deepcopy(self)
+
+        if reset_optimizer:
+            model_copy.optimizer = None
+
+        if reset_history:
+            model_copy.history = []
+
+        model_copy.best_state_dict = None
+        model_copy.best_epoch = None
+        model_copy.best_metrics = None
+        model_copy.best_val_loss = float("inf")
+
+        return model_copy
