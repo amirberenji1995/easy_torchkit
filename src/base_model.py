@@ -1,7 +1,7 @@
 import torch
 import copy
 from abc import ABC, abstractmethod
-from typing import List, TypeVar, Literal, Type, Dict, Callable
+from typing import List, TypeVar, Literal, Type, Dict, Any, Callable
 from pathlib import Path
 from .configurations import TrainingParams, Task, TrainingHistory
 
@@ -56,12 +56,20 @@ class BaseTaskModel(torch.nn.Module, ABC):
         loss_fn: Callable,
         metrics: List = None,
     ) -> Dict[str, float]:
-        """Task-specific metric logic (Classification vs Regression)."""
         pass
 
     @abstractmethod
     def summary(self, input_size, **kwargs):
         pass
+
+    def _run_evaluation_pass(
+        self, x: torch.Tensor, output_layer: str | None = None
+    ) -> torch.Tensor:
+        """
+        Default evaluation pass hook.
+        Subclasses override this for Siamese/Contrastive logic.
+        """
+        return self(x, output_layer=output_layer)
 
     def _run_one_epoch(
         self, x, y, *, optimizer, loss_fn, batch_size, training_step, output_layer
@@ -94,14 +102,11 @@ class BaseTaskModel(torch.nn.Module, ABC):
     def _run_training_loop(self, x, y, *, optimizer, loss_fn, params: TrainingParams):
         from sklearn.model_selection import train_test_split
 
-        # Data prep
+        stratify = (
+            y.cpu() if (self.task == Task.classification and y.ndim == 1) else None
+        )
         x_train, x_val, y_train, y_val = train_test_split(
-            x.cpu(),
-            y.cpu(),
-            test_size=params.val_size,
-            stratify=y.cpu()
-            if (self.task == Task.classification and y.ndim == 1)
-            else None,
+            x.cpu(), y.cpu(), test_size=params.val_size, stratify=stratify
         )
         x_train, y_train, x_val, y_val = (
             x_train.to(self.device),
@@ -116,7 +121,6 @@ class BaseTaskModel(torch.nn.Module, ABC):
         patience_counter = 0
 
         for epoch in range(1, params.epochs + 1):
-            # Train
             _, train_logits = self._run_one_epoch(
                 x_train,
                 y_train,
@@ -130,18 +134,19 @@ class BaseTaskModel(torch.nn.Module, ABC):
                 train_logits, y_train, loss_fn, params.metrics
             )
 
-            # Val
             self.eval()
             with torch.no_grad():
-                val_logits = self(x_val, output_layer=params.output_layer)
+                # Use the evaluation hook to handle potential Siamese logic
+                val_outputs = self._run_evaluation_pass(
+                    x_val, output_layer=params.output_layer
+                )
                 val_metrics = self._compute_metrics(
-                    val_logits, y_val, loss_fn, params.metrics
+                    val_outputs, y_val, loss_fn, params.metrics
                 )
 
             history.log_train(train_metrics)
             history.log_val(val_metrics)
 
-            # Checkpointing
             if self.track_best_model and val_metrics["loss"] < self.best_val_loss:
                 self.best_val_loss, self.best_epoch, self.best_metrics = (
                     val_metrics["loss"],
@@ -166,7 +171,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
         m_str = (
             " | ".join(
                 [
-                    f"Train {m.name}: {train_m[m.name]:.4f} | Val {m.name}: {val_m[m.name]:.4f}"
+                    f"T-{m.name}: {train_m[m.name]:.4f} | V-{m.name}: {val_m[m.name]:.4f}"
                     for m in params.metrics
                 ]
             )
@@ -174,7 +179,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
             else ""
         )
         print(
-            f"[{params.phase.upper()} | {epoch}/{params.epochs}] Loss: T {train_m['loss']:.4f} / V {val_m['loss']:.4f} "
+            f"[{params.phase.upper()} | {epoch}/{params.epochs}] Loss: T-{train_m['loss']:.4f} / V-{val_m['loss']:.4f} "
             + m_str
         )
 
@@ -189,7 +194,6 @@ class BaseTaskModel(torch.nn.Module, ABC):
             params=training_params,
         )
 
-    # --- Layer Management (Simplified) ---
     def set_layers_grad(
         self, layer_names: List[str] | Literal["all"], requires_grad: bool
     ):
@@ -212,41 +216,10 @@ class BaseTaskModel(torch.nn.Module, ABC):
     def unfreeze_layers(self, names="all"):
         self.set_layers_grad(names, True)
 
-    def copy(self, reset_history=True, reset_optimizer=True):
-        cp = copy.deepcopy(self)
-        if reset_optimizer:
-            cp.optimizer = None
-        if reset_history:
-            cp.history = []
-        cp.best_state_dict, cp.best_epoch, cp.best_metrics, cp.best_val_loss = (
-            None,
-            None,
-            None,
-            float("inf"),
-        )
-        return cp
-
-    def export(self, path: str | Path):
-        checkpoint = {
-            "state_dict": self.state_dict(),
-            "init_params": self.init_params,
-            "task": self.task,
-            "best_state_dict": self.best_state_dict,
-            "history": self.history,
-        }
-        torch.save(checkpoint, Path(path))
-
-    @classmethod
-    def import_(cls: Type[T], path: str | Path, device="cpu") -> T:
-        ckpt = torch.load(Path(path), map_location=device)
-        model = cls(**ckpt.get("init_params", {}))
-        model.load_state_dict(ckpt["state_dict"])
-        model.history = ckpt.get("history", [])
-        return model.to(device)
-
     def recover_best_model(self):
         if self.best_state_dict:
             self.load_state_dict(self.best_state_dict)
+            print("✔ Best model recovered")
 
     def _optimizer_creator(self, params: TrainingParams):
         return params.optimizer(

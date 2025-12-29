@@ -20,15 +20,35 @@ class ClassificationModel(BaseTaskModel):
         early_stopping_patience=500,
     ):
         super().__init__(
-            task=Task.classification,
-            device=device,
-            track_best_model=track_best_model,
-            early_stopping=early_stopping,
-            early_stopping_patience=early_stopping_patience,
+            Task.classification,
+            device,
+            track_best_model,
+            early_stopping,
+            early_stopping_patience,
         )
 
     def summary(self, input_size, **kwargs):
         return torchinfo_summary(self, input_size, **kwargs)
+
+    def _run_evaluation_pass(
+        self, x: torch.Tensor, output_layer: str | None = None
+    ) -> torch.Tensor:
+        """
+        Overrides the base hook to handle Siamese split-forward pass
+        if the data contains pairs (Batch, 2, ...).
+        """
+        # Logic: If x is 4D (CNN) or 3D (Tabular/Linear) and the second dim is 2
+        # we treat it as a pair.
+        if x.ndim >= 2 and x.size(1) == 2:
+            x1, x2 = x[:, 0], x[:, 1]
+
+            z1 = self(x1, output_layer=output_layer)
+            z2 = self(x2, output_layer=output_layer)
+
+            # Flatten to ensure we return embeddings for distance calc
+            return torch.cat([z1.view(z1.size(0), -1), z2.view(z2.size(0), -1)], dim=0)
+
+        return super()._run_evaluation_pass(x, output_layer=output_layer)
 
     def _compute_metrics(
         self,
@@ -39,7 +59,7 @@ class ClassificationModel(BaseTaskModel):
     ) -> Dict[str, float]:
         if isinstance(loss_fn, ContrastiveLoss):
             z1, z2 = logits.chunk(2, dim=0)
-            loss_val = loss_fn(z1, z2, y)
+            loss_val = loss_fn(z1, z2, y.view(-1).float())
             preds = None
         else:
             if logits.ndim > 2:
@@ -59,25 +79,30 @@ class ClassificationModel(BaseTaskModel):
     def predict(self, x: torch.Tensor, output_layer: str = None) -> torch.Tensor:
         self.eval()
         with torch.no_grad():
+            # Uses the standard forward pass (not pairs)
             logits = self(x.to(self.device), output_layer=output_layer)
-            return torch.argmax(logits.view(logits.size(0), -1), dim=1).cpu()
+            if logits.ndim > 2:
+                logits = logits.view(logits.size(0), -1)
+            return torch.argmax(logits, dim=1).cpu()
 
     def evaluate(self, x, y, metrics=None, output_layer=None):
         if metrics is None:
-            metrics = [
-                EvaluationMetric(name="Loss", function=torch.nn.CrossEntropyLoss()),
-                EvaluationMetric(name="Accuracy", function=accuracy_score),
-            ]
+            metrics = [EvaluationMetric(name="Accuracy", function=accuracy_score)]
+
         self.eval()
         with torch.no_grad():
-            logits = self(x.to(self.device), output_layer=output_layer)
-            # Use the first metric as primary loss if it's a module
-            loss_fn = (
-                metrics[0].function
-                if isinstance(metrics[0].function, torch.nn.Module)
-                else torch.nn.CrossEntropyLoss()
-            )
-            return self._compute_metrics(logits, y.to(self.device), loss_fn, metrics)
+            x, y = x.to(self.device), y.to(self.device)
+            # Use the hook to handle potential pairs in x
+            outputs = self._run_evaluation_pass(x, output_layer=output_layer)
+
+            # Default fallback for metric compute logic
+            loss_fn = torch.nn.CrossEntropyLoss()
+            for m in metrics:
+                if isinstance(m.function, torch.nn.Module):
+                    loss_fn = m.function
+                    break
+
+            return self._compute_metrics(outputs, y, loss_fn, metrics)
 
     def fine_tune(self, x, y, params: TrainingParams, reset_best=True):
         params = params.model_copy(update={"phase": TrainingPhaseType.fine_tuning})
@@ -91,9 +116,11 @@ class ClassificationModel(BaseTaskModel):
         h = self.history[index]
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
         for ax, m, title in zip(axes, ["loss", "accuracy"], ["Loss", "Accuracy"]):
-            ax.plot(h.train[m], label="Train")
-            ax.plot(h.val[m], label="Val")
-            ax.set_title(title)
-            ax.legend()
-            ax.grid(True)
+            if m in h.train:
+                ax.plot(h.train[m], label="Train")
+                ax.plot(h.val[m], label="Val")
+                ax.set_title(title)
+                ax.legend()
+                ax.grid(True)
+        plt.tight_layout()
         plt.show()
