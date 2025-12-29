@@ -1,14 +1,14 @@
 import torch
 import copy
 from abc import ABC, abstractmethod
-from typing import List, TypeVar, Literal, Type, Dict, Any, Callable
+from typing import List, TypeVar, Literal, Type, Dict, Callable
 from pathlib import Path
-from .configurations import TrainingParams, Task, TrainingHistory, TrainingPhaseType
+from .configurations import TrainingParams, Task, TrainingHistory
 
-T = TypeVar("T", bound="BaseModel")
+T = TypeVar("T", bound="BaseTaskModel")
 
 
-class BaseModel(torch.nn.Module, ABC):
+class BaseTaskModel(torch.nn.Module, ABC):
     def __init__(
         self,
         task: Task,

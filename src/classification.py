@@ -4,14 +4,14 @@ from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 from torchinfo import summary as torchinfo_summary
-from .base_model import BaseModel
+from .base_model import BaseTaskModel
 from .utils import ContrastiveLoss
 from .configurations import Task, TrainingParams, EvaluationMetric, TrainingPhaseType
 
 sns.set_theme()
 
 
-class ClassificationModel(BaseModel):
+class ClassificationModel(BaseTaskModel):
     def __init__(
         self,
         device=torch.device("cpu"),
@@ -20,11 +20,11 @@ class ClassificationModel(BaseModel):
         early_stopping_patience=500,
     ):
         super().__init__(
-            Task.classification,
-            device,
-            track_best_model,
-            early_stopping,
-            early_stopping_patience,
+            task=Task.classification,
+            device=device,
+            track_best_model=track_best_model,
+            early_stopping=early_stopping,
+            early_stopping_patience=early_stopping_patience,
         )
 
     def summary(self, input_size, **kwargs):
@@ -65,8 +65,8 @@ class ClassificationModel(BaseModel):
     def evaluate(self, x, y, metrics=None, output_layer=None):
         if metrics is None:
             metrics = [
-                EvaluationMetric("Loss", torch.nn.CrossEntropyLoss()),
-                EvaluationMetric("Accuracy", accuracy_score),
+                EvaluationMetric(name="Loss", function=torch.nn.CrossEntropyLoss()),
+                EvaluationMetric(name="Accuracy", function=accuracy_score),
             ]
         self.eval()
         with torch.no_grad():
