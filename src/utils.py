@@ -1,5 +1,6 @@
 import torch
 from typing import Callable
+import torch.nn.functional as F
 
 
 def training_step(
@@ -38,8 +39,8 @@ def supervised_step(*, model, xb, yb, optimizer, loss_fn, output_layer=None):
 def contrastive_step(
     *,
     model: torch.nn.Module,
-    xb: torch.Tensor,   # [B, 2, C, L]
-    yb: torch.Tensor,   # [B, 1] or [B]
+    xb: torch.Tensor,  # [B, 2, C, L]
+    yb: torch.Tensor,  # [B, 1] or [B]
     optimizer: torch.optim.Optimizer,
     loss_fn: Callable,
     output_layer: str | None = None,
@@ -48,8 +49,8 @@ def contrastive_step(
     optimizer.zero_grad()
 
     # Split pairs
-    x1 = xb[:, 0]   # [B, C, L]
-    x2 = xb[:, 1]   # [B, C, L]
+    x1 = xb[:, 0]  # [B, C, L]
+    x2 = xb[:, 1]  # [B, C, L]
 
     # Forward independently
     z1 = model(x1, output_layer=output_layer)
@@ -69,3 +70,36 @@ def contrastive_step(
     logits = torch.cat([z1.detach(), z2.detach()], dim=0)
 
     return loss.detach(), logits
+
+
+def dynamic_bootstrapping_step(
+    *,
+    model,
+    xb,
+    yb,
+    optimizer,
+    loss_fn,
+    output_layer=None,
+    alpha=0.8,
+):
+    model.train()
+    optimizer.zero_grad()
+
+    logits = model(xb, output_layer=output_layer)
+    probs = F.softmax(logits, dim=1)
+
+    num_classes = logits.size(1)
+    y_one_hot = F.one_hot(yb, num_classes=num_classes).float()
+
+    with torch.no_grad():
+        max_probs, _ = torch.max(probs, dim=1, keepdim=True)
+        beta = 1.0 - (max_probs * (1.0 - alpha))
+
+    refurbished_targets = (beta * y_one_hot) + ((1 - beta) * probs.detach())
+
+    loss = torch.sum(-refurbished_targets * F.log_softmax(logits, dim=1), dim=1).mean()
+
+    loss.backward()
+    optimizer.step()
+
+    return loss.detach(), logits.detach()
