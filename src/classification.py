@@ -1,8 +1,14 @@
 import torch
-from typing import Callable
+from typing import Callable, List
 
 from .utils import ContrastiveLoss
-from .configurations import TrainingParams, Task, TrainingHistory, TrainingPhaseType
+from .configurations import (
+    TrainingParams,
+    Task,
+    TrainingHistory,
+    TrainingPhaseType,
+    EvaluationMetric,
+)
 from .base_model import BaseModel
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
@@ -238,9 +244,6 @@ class ClassificationModel(BaseModel):
         plt.tight_layout()
         plt.show()
 
-    # -------------------------------------------
-    # PREDICT (classification logic)
-    # -------------------------------------------
     def predict(self, x: torch.Tensor, output_layer: str | None = None) -> torch.Tensor:
         """
         Predict class labels for input x.
@@ -255,47 +258,50 @@ class ClassificationModel(BaseModel):
 
         return preds.cpu()
 
-    # -------------------------------------------
-    # EVALUATE (simple accuracy return)
-    # -------------------------------------------
-    from sklearn.metrics import accuracy_score
-    import torch
+    def evaluate(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        metrics: list[EvaluationMetric] = [
+            EvaluationMetric(
+                name="CrossEntropyLoss", function=torch.nn.CrossEntropyLoss()
+            ),
+            EvaluationMetric(name="Accuracy", function=accuracy_score),
+        ],
+        output_layer: str | None = None,
+    ) -> dict:
 
-    def evaluate(self, x: torch.Tensor, y: torch.Tensor) -> dict:
-        """
-        Evaluate the model on given data.
-
-        Returns a dictionary with:
-            - "loss": loss value using self.loss_fn
-            - "accuracy": sklearn accuracy
-            - other metrics from self.metrics by their name
-        """
-        if self.loss_fn is None:
-            raise ValueError("Loss function is not registered. Call register_loss().")
-
+        self.eval()
         self.to(self.device)
         x, y = x.to(self.device), y.to(self.device)
 
-        self.eval()
+        results = {}
+
         with torch.no_grad():
-            logits = self(x)
-            # Compute loss
-            loss_val = self.loss_fn(logits, y).item()
+            logits = self(x, output_layer=output_layer)
 
-            # Compute accuracy
-            preds = torch.argmax(logits, dim=1).cpu().numpy()
-            y_true = y.cpu().numpy()
-            acc = accuracy_score(y_true, preds)
+            # Ensure shape [batch, num_classes]
+            if logits.ndim > 2:
+                logits = logits.view(logits.size(0), -1)
 
-            # Compute additional metrics
-            metrics_dict = {}
-            if hasattr(self, "metrics") and self.metrics:
-                for metric in self.metrics:
-                    metrics_dict[metric.name] = metric.function(y_true, preds)
+            # Prepare predictions once (only if needed)
+            preds = torch.argmax(logits, dim=1)
 
-        # Combine all results in a single dictionary
-        results = {"loss": loss_val, "accuracy": acc}
-        results.update(metrics_dict)
+            for metric in metrics:
+                fn = metric.function
+
+                # Torch loss-style metric
+                if isinstance(fn, torch.nn.Module):
+                    value = fn(logits, y).item()
+
+                # Sklearn-style metric
+                else:
+                    value = fn(
+                        y.cpu().numpy(),
+                        preds.cpu().numpy(),
+                    )
+
+                results[metric.name] = value
 
         return results
 

@@ -67,8 +67,6 @@ model = SimpleClassifier(
     device=torch.device("cpu"),
 )
 
-model.loss_fn = torch.nn.CrossEntropyLoss()
-
 model.fit(X, y, training_params)
 
 model.recover_best_model()
@@ -76,18 +74,3 @@ model.recover_best_model()
 
 results = model.evaluate(X, y)
 print("Final evaluation:", results)
-
-preds = model.predict(X[:5])
-print("Sample predictions:", preds)
-
-
-model.visualize_training_history()
-
-model.evaluate(X, y)
-
-
-model.fine_tune(X, y, training_params)
-
-model.evaluate(X, y)
-
-model.visualize_training_history()
