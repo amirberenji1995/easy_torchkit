@@ -1,7 +1,7 @@
 import torch
 from typing import Callable
 
-from src.utils import ContrastiveLoss, supervised_step
+from .utils import ContrastiveLoss
 from .configurations import TrainingParams, Task, TrainingHistory, TrainingPhaseType
 from .base_model import BaseModel
 from sklearn.metrics import accuracy_score
