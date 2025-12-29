@@ -35,20 +35,37 @@ def supervised_step(*, model, xb, yb, optimizer, loss_fn, output_layer=None):
     return loss.detach(), logits.detach()
 
 
-def contrastive_step(*, model, xb, yb, optimizer, loss_fn, output_layer=None):
+def contrastive_step(
+    *,
+    model: torch.nn.Module,
+    xb: torch.Tensor,   # [B, 2, C, L]
+    yb: torch.Tensor,   # [B, 1] or [B]
+    optimizer: torch.optim.Optimizer,
+    loss_fn: Callable,
+    output_layer: str | None = None,
+):
     model.train()
     optimizer.zero_grad()
-    
-    x1, x2 = xb[:, 0, :], xb[:, 1, :]
-    
+
+    # Split pairs
+    x1 = xb[:, 0]   # [B, C, L]
+    x2 = xb[:, 1]   # [B, C, L]
+
+    # Forward independently
     z1 = model(x1, output_layer=output_layer)
     z2 = model(x2, output_layer=output_layer)
-    
-    yb = yb.float().view(-1)
-    
+
+    # Flatten embeddings if needed
+    z1 = z1.view(z1.size(0), -1)
+    z2 = z2.view(z2.size(0), -1)
+
+    yb = yb.view(-1).float()
+
     loss = loss_fn(z1, z2, yb)
     loss.backward()
     optimizer.step()
-    
-    embeddings = torch.cat([z1, z2], dim=0)
-    return loss.detach(), embeddings.detach()
+
+    # Return concatenated embeddings for logging compatibility
+    logits = torch.cat([z1.detach(), z2.detach()], dim=0)
+
+    return loss.detach(), logits
