@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from enum import StrEnum
 from typing import Callable, List, Literal, Dict, Optional, Any
 import torch
-from src.utils import supervised_step
+from .utils import supervised_step
 
 class Task(StrEnum):
     classification = 'classification'
