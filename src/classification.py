@@ -1,7 +1,6 @@
 import torch
 from typing import List, Callable, Dict
 from sklearn.metrics import accuracy_score
-import matplotlib.pyplot as plt
 import seaborn as sns
 from .base_model import BaseTaskModel
 from .utils import ContrastiveLoss
@@ -107,8 +106,8 @@ class ClassificationModel(BaseTaskModel):
         self.fit(x, y, params)
 
     def visualize_training_history(self, index=-1, title: str | None = None):
-            if not self.history:
-                return
-            h = self.history[index]
-            
-            h.visualize(title)
+        if not self.history:
+            return
+        h = self.history[index]
+
+        h.visualize(title)
