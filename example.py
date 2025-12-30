@@ -69,6 +69,8 @@ model = SimpleClassifier(
 
 model.fit(X, y, training_params)
 
+model.visualize_training_history(title="Training history")
+
 model.recover_best_model()
 
 
