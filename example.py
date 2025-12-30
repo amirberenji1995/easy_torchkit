@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from src.classification import ClassificationModel, TrainingPhaseType
-from src.configurations import TrainingParams, EvaluationMetric
+from src.classification import ClassificationModel
+from src.configurations import TrainingPhaseType, TrainingParams, EvaluationMetric
 from typing import OrderedDict
 from sklearn.metrics import accuracy_score
 from src.utils import supervised_step

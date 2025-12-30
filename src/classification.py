@@ -5,6 +5,7 @@ import seaborn as sns
 from .base_model import BaseTaskModel
 from .utils import ContrastiveLoss
 from .configurations import Task, TrainingParams, EvaluationMetric, TrainingPhaseType
+from .early_stopping import StoppingCriteria
 
 sns.set_theme()
 
@@ -14,15 +15,13 @@ class ClassificationModel(BaseTaskModel):
         self,
         device=torch.device("cpu"),
         track_best_model=True,
-        early_stopping=True,
-        early_stopping_patience=500,
+        stopping_criteria=[StoppingCriteria()],
     ):
         super().__init__(
             Task.classification,
-            device,
-            track_best_model,
-            early_stopping,
-            early_stopping_patience,
+            device=device,
+            track_best_model=track_best_model,
+            stopping_criteria=stopping_criteria,
         )
 
     def _run_evaluation_pass(

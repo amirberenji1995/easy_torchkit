@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from typing import List, TypeVar, Literal, Type, Dict, Callable
 from pathlib import Path
 from .configurations import TrainingParams, Task, TrainingHistory
+from .early_stopping import EarlyStoppingHandler, StoppingCriteria
 
 T = TypeVar("T", bound="BaseTaskModel")
 
@@ -15,8 +16,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
         task: Task,
         device: torch.device = torch.device("cpu"),
         track_best_model: bool = True,
-        early_stopping: bool = True,
-        early_stopping_patience: int = 50,
+        stopping_criteria: List[StoppingCriteria] | None = None,
     ):
         super().__init__()
         self.task = task
@@ -30,8 +30,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
         self.best_metrics = None
         self.best_val_loss = float("inf")
 
-        self.early_stopping = early_stopping
-        self.early_stopping_patience = early_stopping_patience
+        self.stopping_criteria = stopping_criteria
         self.init_params: dict = {}
 
     def forward(
@@ -102,6 +101,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
     def _run_training_loop(self, x, y, *, optimizer, loss_fn, params: TrainingParams):
         from sklearn.model_selection import train_test_split
 
+        # --- Data Preparation ---
         stratify = (
             y.cpu() if (self.task == Task.classification and y.ndim == 1) else None
         )
@@ -115,12 +115,19 @@ class BaseTaskModel(torch.nn.Module, ABC):
             y_val.to(self.device),
         )
 
+        # --- Initialization ---
         history = TrainingHistory(params=params, phase=params.phase)
         history.initialize()
         self.history.append(history)
-        patience_counter = 0
+
+        # Initialize the generalized handler
+        criteria_to_use = (
+            self.stopping_criteria if self.stopping_criteria is not None else []
+        )
+        es_handler = EarlyStoppingHandler(criteria_to_use)
 
         for epoch in range(1, params.epochs + 1):
+            # 1. Training Phase
             _, train_logits = self._run_one_epoch(
                 x_train,
                 y_train,
@@ -134,9 +141,9 @@ class BaseTaskModel(torch.nn.Module, ABC):
                 train_logits, y_train, loss_fn, params.metrics
             )
 
+            # 2. Validation Phase
             self.eval()
             with torch.no_grad():
-                # Use the evaluation hook to handle potential Siamese logic
                 val_outputs = self._run_evaluation_pass(
                     x_val, output_layer=params.output_layer
                 )
@@ -144,9 +151,11 @@ class BaseTaskModel(torch.nn.Module, ABC):
                     val_outputs, y_val, loss_fn, params.metrics
                 )
 
+            # 3. Logging
             history.log_train(train_metrics)
             history.log_val(val_metrics)
 
+            # 4. Checkpoint Best Model (Always based on validation loss)
             if self.track_best_model and val_metrics["loss"] < self.best_val_loss:
                 self.best_val_loss, self.best_epoch, self.best_metrics = (
                     val_metrics["loss"],
@@ -156,12 +165,10 @@ class BaseTaskModel(torch.nn.Module, ABC):
                 self.best_state_dict = {
                     k: v.detach().cpu().clone() for k, v in self.state_dict().items()
                 }
-                patience_counter = 0
-            else:
-                patience_counter += 1
 
-            if self.early_stopping and patience_counter >= self.early_stopping_patience:
-                print(f"⏹ Early stopping at epoch {epoch}")
+            # 5. Generalized Early Stopping Check
+            # Using the instance 'es_handler' initialized before the loop
+            if es_handler.check(epoch, train_metrics, val_metrics):
                 break
 
             if epoch % params.print_every == 0:
