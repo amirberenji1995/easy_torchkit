@@ -111,27 +111,4 @@ class ClassificationModel(BaseTaskModel):
                 return
             h = self.history[index]
             
-            plot_metrics = ["loss"] + [m.name for m in h.params.metrics]
-            num_plots = len(plot_metrics)
-
-            fig, axes = plt.subplots(1, num_plots, figsize=(7.5 * num_plots, 5), squeeze=False)
-            axes = axes.flatten()
-
-            if title:
-                fig.suptitle(title, fontsize=16)
-
-            for ax, title in zip(axes, plot_metrics):
-                key = title.lower() if title.lower() in h.train else title
-                
-                if key in h.train:
-                    ax.plot(h.train[key], label="Train")
-                    ax.plot(h.val[key], label="Val")
-                    ax.set_title(title.capitalize())
-                    ax.set_xlabel("Epochs")
-                    ax.legend()
-                    ax.grid(True)
-                else:
-                    ax.set_visible(False)
-
-            plt.tight_layout()
-            plt.show()
+            h.visualize(title)
