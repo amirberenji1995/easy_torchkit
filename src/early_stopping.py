@@ -19,25 +19,23 @@ class StoppingCriteria(BaseModel):
 
 class EarlyStoppingHandler:
     def __init__(self, criteria_list: list[StoppingCriteria]):
-        # Store criteria (could be an empty list)
         self.criteria = criteria_list or []
-
-        # Initialize tracking state only for provided criteria
         self.state = []
         for c in self.criteria:
             init_val = float("inf") if c.mode == "min" else float("-inf")
-            self.state.append({"best_val": init_val, "patience": 0})
+            self.state.append(
+                {
+                    "best_val": init_val,
+                    "patience": 0,
+                    "target_hold_count": 0,  # New: Tracks consecutive epochs at target
+                }
+            )
 
     def check(self, epoch: int, train_metrics: dict, val_metrics: dict) -> bool:
-        """
-        Returns True if any stopping criteria is met.
-        If criteria_list is empty, this always returns False (no early stopping).
-        """
         if not self.criteria:
             return False
 
         for i, c in enumerate(self.criteria):
-            # Select the correct set (Train or Val)
             metrics = (
                 train_metrics if c.effective_set == EffectiveSet.TRAIN else val_metrics
             )
@@ -46,18 +44,34 @@ class EarlyStoppingHandler:
             if current_val is None:
                 continue
 
-            # Strategy 1: Target Value reached
+            # --- New Strategy: Target Value with Hold Duration ---
             if c.target_value is not None:
-                reached = (
+                at_target = (
                     current_val >= c.target_value
                     if c.mode == "max"
                     else current_val <= c.target_value
                 )
-                if reached and epoch >= c.min_epoch:
-                    print(f"🎯 Target {c.target_value} reached for {c.metric_name}")
+
+                if at_target:
+                    self.state[i]["target_hold_count"] += 1
+                else:
+                    self.state[i]["target_hold_count"] = (
+                        0  # Reset if it drops below target
+                    )
+
+                # Stop only if target is held for 'patience' duration AND min_epoch is passed
+                if (
+                    self.state[i]["target_hold_count"] >= c.patience
+                    and epoch >= c.min_epoch
+                ):
+                    print(f"✅ Target {c.target_value} held for {c.patience} epochs.")
                     return True
 
-            # Strategy 2: Improvement/Patience
+                # If we are using target_value logic, we skip the standard patience check
+                # for this specific metric to avoid double-triggering.
+                continue
+
+            # --- Standard Strategy: Improvement/Patience ---
             improved = (
                 current_val < self.state[i]["best_val"]
                 if c.mode == "min"
@@ -71,7 +85,7 @@ class EarlyStoppingHandler:
                 self.state[i]["patience"] += 1
 
             if self.state[i]["patience"] >= c.patience and epoch >= c.min_epoch:
-                print(f"⏹ Patience exceeded for {c.metric_name} ({c.effective_set})")
+                print(f"⏹ Patience exceeded for {c.metric_name}")
                 return True
 
         return False
