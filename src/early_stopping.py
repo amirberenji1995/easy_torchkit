@@ -64,7 +64,13 @@ class EarlyStoppingHandler:
                     self.state[i]["target_hold_count"] >= c.patience
                     and epoch >= c.min_epoch
                 ):
-                    print(f"✅ Target {c.target_value} held for {c.patience} epochs.")
+                    print(
+                        f"✅ Target {c.target_value} held for {c.patience} epochs.",
+                        "\n",
+                        f"Epoch: {epoch}",
+                        "\n",
+                        f"Val {c.metric_name}: {current_val}",
+                    )
                     return True
 
                 # If we are using target_value logic, we skip the standard patience check
