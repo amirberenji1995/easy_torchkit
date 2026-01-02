@@ -15,6 +15,7 @@ class StoppingCriteria(BaseModel):
     patience: int = 50
     min_epoch: int = 0
     target_value: Optional[float] = None
+    message: Optional[str] = None
 
 
 class EarlyStoppingHandler:
@@ -65,11 +66,13 @@ class EarlyStoppingHandler:
                     and epoch >= c.min_epoch
                 ):
                     print(
+                        f"{c.message}",
+                        "\n",
                         f"✅ Target {c.target_value} held for {c.patience} epochs.",
                         "\n",
                         f"Epoch: {epoch}",
                         "\n",
-                        f"Val {c.metric_name}: {current_val}",
+                        f"{c.effective_set} {c.metric_name}: {current_val}",
                     )
                     return True
 
@@ -91,7 +94,15 @@ class EarlyStoppingHandler:
                 self.state[i]["patience"] += 1
 
             if self.state[i]["patience"] >= c.patience and epoch >= c.min_epoch:
-                print(f"⏹ Patience exceeded for {c.metric_name}")
+                print(
+                    f"{c.message}",
+                    "\n",
+                    f"⏹ Patience exceeded for {c.metric_name}",
+                    "\n",
+                    f"Epoch: {epoch}",
+                    "\n",
+                    f"{c.effective_set} {c.metric_name}: {current_val}",
+                )
                 return True
 
         return False
