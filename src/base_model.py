@@ -33,6 +33,8 @@ class BaseTaskModel(torch.nn.Module, ABC):
         self.stopping_criteria = stopping_criteria
         self.init_params: dict = {}
 
+        self.to(self.device)
+
     def forward(
         self, x: torch.Tensor, *, output_layer: str | None = None
     ) -> torch.Tensor:
@@ -100,7 +102,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
 
     def _run_training_loop(self, x, y, *, optimizer, loss_fn, params: TrainingParams):
         from sklearn.model_selection import train_test_split
-
+        # TODO: Let's reimplement this part in pytorch to avoid SKLearn dependency and moving data from GPU to CPU 
         # --- Data Preparation ---
         stratify = (
             y.cpu() if (self.task == Task.classification and y.ndim == 1) else None
