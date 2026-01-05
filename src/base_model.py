@@ -6,6 +6,9 @@ from typing import List, TypeVar, Literal, Type, Dict, Callable
 from pathlib import Path
 from .configurations import TrainingParams, Task, TrainingHistory
 from .early_stopping import EarlyStoppingHandler, StoppingCriteria
+import numpy as np
+import random
+import os
 
 T = TypeVar("T", bound="BaseTaskModel")
 
@@ -17,8 +20,12 @@ class BaseTaskModel(torch.nn.Module, ABC):
         device: torch.device = torch.device("cpu"),
         track_best_model: bool = True,
         stopping_criteria: List[StoppingCriteria] | None = None,
+        random_state: int | None = None,
     ):
         super().__init__()
+        self.random_state = (
+            random_state if random_state is not None else np.random.randint(0, 10000)
+        )
         self.task = task
         self.device = device
         self.network: torch.nn.Sequential | None = None
@@ -34,6 +41,17 @@ class BaseTaskModel(torch.nn.Module, ABC):
         self.init_params: dict = {}
 
         self.to(self.device)
+
+    @staticmethod
+    def seed_everything(seed: int):
+        """Standardizes randomness across all engines."""
+        random.seed(seed)
+        os.environ["PYTHONHASHSEED"] = str(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     def forward(
         self, x: torch.Tensor, *, output_layer: str | None = None
@@ -101,21 +119,18 @@ class BaseTaskModel(torch.nn.Module, ABC):
         return epoch_loss / x.size(0), torch.cat(all_outputs, dim=0)
 
     def _run_training_loop(self, x, y, *, optimizer, loss_fn, params: TrainingParams):
-        from sklearn.model_selection import train_test_split
-        # TODO: Let's reimplement this part in pytorch to avoid SKLearn dependency and moving data from GPU to CPU 
         # --- Data Preparation ---
-        stratify = (
-            y.cpu() if (self.task == Task.classification and y.ndim == 1) else None
-        )
-        x_train, x_val, y_train, y_val = train_test_split(
-            x.cpu(), y.cpu(), test_size=params.val_size, stratify=stratify
-        )
-        x_train, y_train, x_val, y_val = (
-            x_train.to(self.device),
-            y_train.to(self.device),
-            x_val.to(self.device),
-            y_val.to(self.device),
-        )
+        generator = torch.Generator(device=self.device)
+        generator.manual_seed(self.random_state)
+
+        indices = torch.randperm(x.size(0), generator=generator, device=self.device)
+        split_point = int(x.size(0) * (1 - params.val_size))
+
+        train_idx = indices[:split_point]
+        val_idx = indices[split_point:]
+
+        x_train, y_train = x[train_idx], y[train_idx]
+        x_val, y_val = x[val_idx], y[val_idx]
 
         # --- Initialization ---
         history = TrainingHistory(params=params, phase=params.phase)
@@ -260,8 +275,11 @@ class BaseTaskModel(torch.nn.Module, ABC):
         path = Path(path)
         checkpoint = torch.load(path, map_location=device)
 
+        seed = checkpoint.get("random_state", 42)
+
         # ---- Rebuild model ----
         init_params = checkpoint.get("init_params", {})
+        init_params["random_state"] = seed
         model = cls(**init_params)
 
         model.load_state_dict(checkpoint["state_dict"])
@@ -289,6 +307,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
         checkpoint = {
             "class_name": self.__class__.__name__,
             "state_dict": self.state_dict(),
+            "random_state": self.random_state,
             "init_params": self.init_params,
             "task": self.task.name if isinstance(self.task, Task) else str(self.task),
             "best_state_dict": self.best_state_dict,
