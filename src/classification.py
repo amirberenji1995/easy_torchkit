@@ -13,9 +13,9 @@ sns.set_theme()
 class ClassificationModel(BaseTaskModel):
     def __init__(
         self,
-        device=torch.device("cpu"),
-        track_best_model=True,
-        stopping_criteria=[StoppingCriteria()],
+        device: torch.device = torch.device("cpu"),
+        track_best_model: bool = True,
+        stopping_criteria: List[StoppingCriteria] = [StoppingCriteria()],
     ):
         super().__init__(
             Task.classification,
