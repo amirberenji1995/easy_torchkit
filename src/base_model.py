@@ -315,3 +315,10 @@ class BaseTaskModel(torch.nn.Module, ABC):
             "history": self.history,
         }
         torch.save(checkpoint, path)
+
+    def _optimizer_creator(self, params: TrainingParams):
+            return params.optimizer(
+                filter(lambda p: p.requires_grad, self.parameters()),
+                lr=params.lr,
+                **(params.optimizer_params or {}),
+            )
