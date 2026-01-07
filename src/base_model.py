@@ -26,6 +26,9 @@ class BaseTaskModel(torch.nn.Module, ABC):
         self.random_state = (
             random_state if random_state is not None else np.random.randint(0, 10000)
         )
+
+        self.seed_everything(self.random_state)
+
         self.task = task
         self.device = device
         self.network: torch.nn.Sequential | None = None
