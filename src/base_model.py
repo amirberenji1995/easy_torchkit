@@ -73,6 +73,70 @@ class BaseTaskModel(torch.nn.Module, ABC):
         # Support for newer PyTorch versions forcing deterministic algorithms
         # torch.use_deterministic_algorithms(True) # Uncomment if high-strictness is needed
 
+    def forward(
+            self, x: torch.Tensor, *, output_layer: str | None = None
+        ) -> torch.Tensor:
+            if self.network is None:
+                raise RuntimeError("self.network is not defined.")
+
+            for name, layer in self.network.named_children():
+                x = layer(x)
+                if output_layer is not None and name == output_layer:
+                    return x
+
+            if output_layer is not None:
+                raise ValueError(f"Layer '{output_layer}' not found.")
+            return x
+
+    @abstractmethod
+    def _compute_metrics(
+        self,
+        logits: torch.Tensor,
+        y: torch.Tensor,
+        loss_fn: Callable,
+        metrics: List = None,
+    ) -> Dict[str, float]:
+        pass
+
+    def summary(self, input_size, **kwargs):
+        return torchinfo_summary(self, input_size, **kwargs)
+
+    def _run_evaluation_pass(
+        self, x: torch.Tensor, output_layer: str | None = None
+    ) -> torch.Tensor:
+        """
+        Default evaluation pass hook.
+        Subclasses override this for Siamese/Contrastive logic.
+        """
+        return self(x, output_layer=output_layer)
+
+    def _run_one_epoch(
+        self, x, y, *, optimizer, loss_fn, batch_size, training_step, output_layer
+    ) -> tuple[float, torch.Tensor]:
+        self.train()
+        epoch_loss = 0.0
+        if batch_size == "full":
+            batch_size = x.size(0)
+        num_batches = (x.size(0) + batch_size - 1) // batch_size
+
+        all_outputs = []
+        for i in range(num_batches):
+            xb, yb = (
+                x[i * batch_size : (i + 1) * batch_size],
+                y[i * batch_size : (i + 1) * batch_size],
+            )
+            loss, logits = training_step(
+                model=self,
+                xb=xb,
+                yb=yb,
+                optimizer=optimizer,
+                loss_fn=loss_fn,
+                output_layer=output_layer,
+            )
+            epoch_loss += loss * xb.size(0)
+            all_outputs.append(logits)
+
+        return epoch_loss / x.size(0), torch.cat(all_outputs, dim=0)
     def _run_training_loop(self, x, y, *, optimizer, loss_fn, params: TrainingParams):
         # --- Reproducible Split Logic ---
         # We use a local generator tied to the model's random_state
@@ -142,7 +206,54 @@ class BaseTaskModel(torch.nn.Module, ABC):
             if epoch % params.print_every == 0:
                 self._print_epoch_log(epoch, params, train_metrics, val_metrics)
 
-    # ... [forward, _run_one_epoch, _run_evaluation_pass, etc. remain as you had them] ...
+    def _print_epoch_log(self, epoch, params, train_m, val_m):
+        m_str = (
+            " | ".join(
+                [
+                    f"T-{m.name}: {train_m[m.name]:.4f} | V-{m.name}: {val_m[m.name]:.4f}"
+                    for m in params.metrics
+                ]
+            )
+            if params.metrics
+            else ""
+        )
+        print(
+            f"[{params.phase.upper()} | {epoch}/{params.epochs}] Loss: T-{train_m['loss']:.4f} / V-{val_m['loss']:.4f} "
+            + m_str
+        )
+
+    def fit(self, x: torch.Tensor, y: torch.Tensor, training_params: TrainingParams):
+        self.to(self.device)
+        optimizer = self._optimizer_creator(training_params)
+        self._run_training_loop(
+            x=x.to(self.device),
+            y=y.to(self.device),
+            optimizer=optimizer,
+            loss_fn=training_params.loss_fn,
+            params=training_params,
+        )
+
+    def set_layers_grad(
+        self, layer_names: List[str] | Literal["all"], requires_grad: bool
+    ):
+        if layer_names == "all":
+            for p in self.network.parameters():
+                p.requires_grad = requires_grad
+        else:
+            for name in layer_names:
+                found = False
+                for p_name, param in self.named_parameters():
+                    if p_name.startswith(f"network.{name}."):
+                        param.requires_grad = requires_grad
+                        found = True
+                if not found:
+                    raise ValueError(f"Layer {name} not found.")
+
+    def freeze_layers(self, names="all"):
+        self.set_layers_grad(names, False)
+
+    def unfreeze_layers(self, names="all"):
+        self.set_layers_grad(names, True)
 
     def recover_best_model(self) -> None:
         if self.best_state_dict is None:
