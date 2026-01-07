@@ -157,6 +157,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
         Crucial for Fine-Tuning experiments to keep pre-trained weights.
         """
         model_copy = copy.deepcopy(self)
+        model_copy.seed_everything(model_copy.random_state)
         if reset_history:
             model_copy.history = []
         if reset_best:
