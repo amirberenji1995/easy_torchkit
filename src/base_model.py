@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import List, TypeVar, Literal, Type, Dict, Callable
 from pathlib import Path
 from .configurations import TrainingParams, Task, TrainingHistory
-from .early_stopping import EarlyStoppingHandler, StoppingCriteria
+from .early_stopping import EarlyStoppingHandler
 import numpy as np
 import random
 import os
@@ -19,7 +19,6 @@ class BaseTaskModel(torch.nn.Module, ABC):
         task: Task,
         device: torch.device = torch.device("cpu"),
         track_best_model: bool = True,
-        stopping_criteria: List[StoppingCriteria] | None = None,
         random_state: int | None = None,
         **kwargs,  # Captures subclass-specific architecture params
     ):
@@ -38,7 +37,6 @@ class BaseTaskModel(torch.nn.Module, ABC):
             "task": task,
             "device": device,
             "track_best_model": track_best_model,
-            "stopping_criteria": stopping_criteria,
             **kwargs,
         }
 
@@ -53,7 +51,6 @@ class BaseTaskModel(torch.nn.Module, ABC):
         self.best_metrics = None
         self.best_val_loss = float("inf")
 
-        self.stopping_criteria = stopping_criteria
         self.to(self.device)
 
     @staticmethod
@@ -74,19 +71,19 @@ class BaseTaskModel(torch.nn.Module, ABC):
         # torch.use_deterministic_algorithms(True) # Uncomment if high-strictness is needed
 
     def forward(
-            self, x: torch.Tensor, *, output_layer: str | None = None
-        ) -> torch.Tensor:
-            if self.network is None:
-                raise RuntimeError("self.network is not defined.")
+        self, x: torch.Tensor, *, output_layer: str | None = None
+    ) -> torch.Tensor:
+        if self.network is None:
+            raise RuntimeError("self.network is not defined.")
 
-            for name, layer in self.network.named_children():
-                x = layer(x)
-                if output_layer is not None and name == output_layer:
-                    return x
+        for name, layer in self.network.named_children():
+            x = layer(x)
+            if output_layer is not None and name == output_layer:
+                return x
 
-            if output_layer is not None:
-                raise ValueError(f"Layer '{output_layer}' not found.")
-            return x
+        if output_layer is not None:
+            raise ValueError(f"Layer '{output_layer}' not found.")
+        return x
 
     @abstractmethod
     def _compute_metrics(
@@ -137,7 +134,21 @@ class BaseTaskModel(torch.nn.Module, ABC):
             all_outputs.append(logits)
 
         return epoch_loss / x.size(0), torch.cat(all_outputs, dim=0)
+
     def _run_training_loop(self, x, y, *, optimizer, loss_fn, params: TrainingParams):
+        # --- 1. Infinite Epoch / Stopping Criteria Check ---
+        criteria = params.stopping_criteria or []
+
+        if params.epochs is None:
+            if not criteria:
+                raise ValueError(
+                    "Error: 'epochs' is set to None, but 'stopping_criteria' is empty in TrainingParams. "
+                    "You must provide stopping criteria for infinite-loop training."
+                )
+            max_epochs = 1_000_000  # Hard safety limit
+        else:
+            max_epochs = params.epochs
+
         # --- Reproducible Split Logic ---
         # We use a local generator tied to the model's random_state
         generator = torch.Generator(device=self.device)
@@ -157,9 +168,9 @@ class BaseTaskModel(torch.nn.Module, ABC):
         history.initialize()
         self.history.append(history)
 
-        es_handler = EarlyStoppingHandler(self.stopping_criteria or [])
+        es_handler = EarlyStoppingHandler(criteria_list=criteria)
 
-        for epoch in range(1, params.epochs + 1):
+        for epoch in range(1, max_epochs + 1):
             # 1. Training Phase
             self.train()
             _, train_logits = self._run_one_epoch(
@@ -205,6 +216,11 @@ class BaseTaskModel(torch.nn.Module, ABC):
 
             if epoch % params.print_every == 0:
                 self._print_epoch_log(epoch, params, train_metrics, val_metrics)
+
+            if params.epochs is None and epoch == max_epochs:
+                print(
+                    f"Reached hard safety limit of {max_epochs} epochs without early stopping."
+                )
 
     def _print_epoch_log(self, epoch, params, train_m, val_m):
         m_str = (
@@ -317,8 +333,8 @@ class BaseTaskModel(torch.nn.Module, ABC):
         torch.save(checkpoint, path)
 
     def _optimizer_creator(self, params: TrainingParams):
-            return params.optimizer(
-                filter(lambda p: p.requires_grad, self.parameters()),
-                lr=params.lr,
-                **(params.optimizer_params or {}),
-            )
+        return params.optimizer(
+            filter(lambda p: p.requires_grad, self.parameters()),
+            lr=params.lr,
+            **(params.optimizer_params or {}),
+        )

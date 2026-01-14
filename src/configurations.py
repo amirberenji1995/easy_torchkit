@@ -5,6 +5,7 @@ import torch
 from .utils import supervised_step
 import matplotlib.pyplot as plt
 import seaborn as sns
+from src.early_stopping import StoppingCriteria
 
 sns.set_theme()
 
@@ -31,7 +32,7 @@ class TrainingPhaseType(StrEnum):
 
 
 class TrainingParams(BaseModel):
-    epochs: int = 10
+    epochs: int | None = 10
     lr: float = 0.001
     batch_size: Literal["full"] | int = 64
     val_size: float = 0.25
@@ -45,6 +46,7 @@ class TrainingParams(BaseModel):
     phase: TrainingPhaseType = TrainingPhaseType.training
     output_layer: str | None = None
     training_step: Callable = supervised_step
+    stopping_criteria: List[StoppingCriteria] | None = None
 
 
 class TrainingHistory(BaseModel):

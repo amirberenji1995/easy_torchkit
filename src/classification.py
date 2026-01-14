@@ -15,14 +15,12 @@ class ClassificationModel(BaseTaskModel):
         self,
         device: torch.device = torch.device("cpu"),
         track_best_model: bool = True,
-        stopping_criteria: List[StoppingCriteria] = [StoppingCriteria()],
         random_state: int | None = None,
     ):
         super().__init__(
             Task.classification,
             device=device,
             track_best_model=track_best_model,
-            stopping_criteria=stopping_criteria,
             random_state=random_state,
         )
 
