@@ -1,3 +1,4 @@
+import time
 import torch
 from torchinfo import summary as torchinfo_summary
 import copy
@@ -111,6 +112,9 @@ class BaseTaskModel(torch.nn.Module, ABC):
         self, x, y, *, optimizer, loss_fn, batch_size, training_step, output_layer
     ) -> tuple[float, torch.Tensor]:
         self.train()
+
+        start_time = time.time()
+
         epoch_loss = 0.0
         if batch_size == "full":
             batch_size = x.size(0)
@@ -133,7 +137,9 @@ class BaseTaskModel(torch.nn.Module, ABC):
             epoch_loss += loss * xb.size(0)
             all_outputs.append(logits)
 
-        return epoch_loss / x.size(0), torch.cat(all_outputs, dim=0)
+        duration = time.time() - start_time
+
+        return epoch_loss / x.size(0), torch.cat(all_outputs, dim=0), duration
 
     def _run_training_loop(self, x, y, *, optimizer, loss_fn, params: TrainingParams):
         # --- 1. Infinite Epoch / Stopping Criteria Check ---
@@ -173,7 +179,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
         for epoch in range(1, max_epochs + 1):
             # 1. Training Phase
             self.train()
-            _, train_logits = self._run_one_epoch(
+            _, train_logits, duration = self._run_one_epoch(
                 x_train,
                 y_train,
                 optimizer=optimizer,
@@ -185,6 +191,8 @@ class BaseTaskModel(torch.nn.Module, ABC):
             train_metrics = self._compute_metrics(
                 train_logits, y_train, loss_fn, params.metrics
             )
+
+            history.log_epoch_time(duration)
 
             # 2. Validation Phase
             self.eval()
@@ -215,14 +223,15 @@ class BaseTaskModel(torch.nn.Module, ABC):
                 break
 
             if epoch % params.print_every == 0:
-                self._print_epoch_log(epoch, params, train_metrics, val_metrics)
+                self._print_epoch_log(epoch, params, train_metrics, val_metrics, duration)
 
             if params.epochs is None and epoch == max_epochs:
                 print(
                     f"Reached hard safety limit of {max_epochs} epochs without early stopping."
                 )
 
-    def _print_epoch_log(self, epoch, params, train_m, val_m):
+    def _print_epoch_log(self, epoch, params, train_m, val_m, duration=None):
+        # 1. Format the metrics string
         m_str = (
             " | ".join(
                 [
@@ -233,13 +242,31 @@ class BaseTaskModel(torch.nn.Module, ABC):
             if params.metrics
             else ""
         )
+        
+        # 2. Handle "Infinite" epochs display
+        total_epochs = params.epochs if params.epochs is not None else "NONE"
+        
+        # 3. Format the timing string
+        # If duration is very small, we show ms; otherwise, seconds.
+        time_str = ""
+        if duration is not None:
+            if duration < 0.001:
+                time_str = f" | Epoch Elapsed: {duration * 1000:.3f} mSec"
+            else:
+                time_str = f" | Epoch Elapsed: {duration:.4f} Sec"
+
+        # 4. Final print statement
         print(
-            f"[{params.phase.upper()} | {epoch}/{params.epochs}] Loss: T-{train_m['loss']:.4f} / V-{val_m['loss']:.4f} "
-            + m_str
+            f"[{params.phase.upper()} | {epoch}/{total_epochs}] "
+            f"Loss: T-{train_m['loss']:.4f} / V-{val_m['loss']:.4f} "
+            f"{m_str}{time_str}"
         )
 
     def fit(self, x: torch.Tensor, y: torch.Tensor, training_params: TrainingParams):
         self.to(self.device)
+
+        start_fit_time = time.time()
+
         optimizer = self._optimizer_creator(training_params)
         self._run_training_loop(
             x=x.to(self.device),
@@ -248,6 +275,9 @@ class BaseTaskModel(torch.nn.Module, ABC):
             loss_fn=training_params.loss_fn,
             params=training_params,
         )
+
+        if self.history:
+            self.history[-1].set_total_time(time.time() - start_fit_time)
 
     def set_layers_grad(
         self, layer_names: List[str] | Literal["all"], requires_grad: bool

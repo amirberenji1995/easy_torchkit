@@ -56,6 +56,9 @@ class TrainingHistory(BaseModel):
     train: Dict[str, List[float]] = Field(default_factory=dict)
     val: Dict[str, List[float]] = Field(default_factory=dict)
 
+    epoch_times: List[float] = Field(default_factory=list)
+    total_time: float = 0.0
+
     def initialize(self):
         """Initialize standard metric containers."""
         self.train = {"loss": [], "accuracy": []}
@@ -72,6 +75,18 @@ class TrainingHistory(BaseModel):
     def log_val(self, values: Dict[str, float]):
         for k, v in values.items():
             self.val.setdefault(k, []).append(v)
+
+    def log_epoch_time(self, duration: float):
+        self.epoch_times.append(duration)
+
+    def set_total_time(self, duration: float):
+        self.total_time = duration
+
+    @property
+    def average_epoch_time(self) -> float:
+        if not self.epoch_times:
+            return None
+        return sum(self.epoch_times) / len(self.epoch_times)
 
     @property
     def epochs(self) -> int:

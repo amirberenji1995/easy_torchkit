@@ -87,3 +87,6 @@ model.recover_best_model()
 
 results = model.evaluate(X, y)
 print("Final evaluation:", results)
+
+print(f"Total time: {model.history[-1].total_time} sec", "\n",
+      f"Average time per epoch: {model.history[-1].average_epoch_time} sec")
