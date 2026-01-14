@@ -5,7 +5,7 @@ import torch
 from .utils import supervised_step
 import matplotlib.pyplot as plt
 import seaborn as sns
-from src.early_stopping import StoppingCriteria
+from .early_stopping import StoppingCriteria
 
 sns.set_theme()
 
