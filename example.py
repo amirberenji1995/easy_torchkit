@@ -81,12 +81,15 @@ model = SimpleClassifier(
 # This will now monitor validation loss and trigger the 5-epoch patience rule
 model.fit(X, y, training_params)
 
-model.visualize_training_history(title="Training history")
+model.visualize_training_history(title="Training history", show_or_export="both")
 
 model.recover_best_model()
 
 results = model.evaluate(X, y)
 print("Final evaluation:", results)
 
-print(f"Total time: {model.history[-1].total_time} sec", "\n",
-      f"Average time per epoch: {model.history[-1].average_epoch_time} sec")
+print(
+    f"Total time: {model.history[-1].total_time} sec",
+    "\n",
+    f"Average time per epoch: {model.history[-1].average_epoch_time} sec",
+)

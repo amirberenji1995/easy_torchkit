@@ -92,7 +92,12 @@ class TrainingHistory(BaseModel):
     def epochs(self) -> int:
         return len(self.train.get("loss", []))
 
-    def visualize(self, title: str | None = None):
+    def visualize(
+        self,
+        title: str | None = None,
+        show_or_export: Literal["show", "export", "both"] = "show",
+        export_path: str | None = None,
+    ):
         plot_metrics = ["loss"] + [m.name for m in self.params.metrics]
         num_plots = len(plot_metrics)
 
@@ -101,16 +106,21 @@ class TrainingHistory(BaseModel):
         )
         axes = axes.flatten()
 
-        if title:
-            fig.suptitle(title, fontsize=16)
+        display_title = title if title else f"Training History - {self.phase.value}"
 
-        for ax, title in zip(axes, plot_metrics):
-            key = title.lower() if title.lower() in self.train else title
+        fig.suptitle(display_title, fontsize=16)
+
+        for ax, metric_name in zip(axes, plot_metrics):
+            key = (
+                metric_name.lower()
+                if metric_name.lower() in self.train
+                else metric_name
+            )
 
             if key in self.train:
                 ax.plot(self.train[key], label="Train")
                 ax.plot(self.val[key], label="Val")
-                ax.set_title(title.capitalize())
+                ax.set_title(metric_name.capitalize())
                 ax.set_xlabel("Epochs")
                 ax.legend()
                 ax.grid(True)
@@ -118,4 +128,20 @@ class TrainingHistory(BaseModel):
                 ax.set_visible(False)
 
         plt.tight_layout()
-        plt.show()
+
+        if show_or_export in ["export", "both"]:
+            if export_path:
+                final_filename = export_path
+            else:
+                safe_title = "".join(
+                    [c if c.isalnum() or c in (" ", "_") else "" for c in display_title]
+                )
+                final_filename = safe_title.replace(" ", "_")
+
+            plt.savefig(final_filename)
+
+        # --- SHOW LOGIC ---
+        if show_or_export in ["show", "both"]:
+            plt.show()
+        else:
+            plt.close(fig)

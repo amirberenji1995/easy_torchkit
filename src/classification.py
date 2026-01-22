@@ -1,11 +1,10 @@
 import torch
-from typing import List, Callable, Dict
+from typing import List, Callable, Dict, Literal
 from sklearn.metrics import accuracy_score
 import seaborn as sns
 from .base_model import BaseTaskModel
 from .utils import ContrastiveLoss
 from .configurations import Task, TrainingParams, EvaluationMetric, TrainingPhaseType
-from .early_stopping import StoppingCriteria
 
 sns.set_theme()
 
@@ -104,9 +103,15 @@ class ClassificationModel(BaseTaskModel):
             self.best_state_dict, self.best_val_loss = None, float("inf")
         self.fit(x, y, params)
 
-    def visualize_training_history(self, index=-1, title: str | None = None):
+    def visualize_training_history(
+        self,
+        index=-1,
+        title: str | None = None,
+        show_or_export: Literal["show", "export", "both"] = "show",
+        export_path: str | None = None,
+    ):
         if not self.history:
             return
         h = self.history[index]
 
-        h.visualize(title)
+        h.visualize(title, show_or_export, export_path)
