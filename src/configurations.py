@@ -111,11 +111,14 @@ class TrainingHistory(BaseModel):
         fig.suptitle(display_title, fontsize=16)
 
         for ax, metric_name in zip(axes, plot_metrics):
-            key = (
-                metric_name.lower()
-                if metric_name.lower() in self.train
-                else metric_name
-            )
+            # Fix: Check for the exact name first, THEN try lowercase
+            if metric_name in self.train:
+                key = metric_name
+            elif metric_name.lower() in self.train:
+                key = metric_name.lower()
+            else:
+                ax.set_visible(False)
+                continue
 
             if key in self.train:
                 ax.plot(self.train[key], label="Train")
