@@ -49,6 +49,21 @@ class TrainingParams(BaseModel):
     stopping_criteria: List[StoppingCriteria] | None = None
 
 
+class TerminationReason(StrEnum):
+    MAX_EPOCHS = "max_epochs"
+    EARLY_STOPPING = "early_stopping"
+    HARD_SAFETY_LIMIT = "hard_safety_limit"
+    MANUAL_INTERRUPTION = "manual_interruption"
+
+
+class TrainingTermination(BaseModel):
+    epoch: int
+    reason: TerminationReason
+    details: Optional[str] = None
+    final_val_metrics: Dict[str, float]
+    best_model_recovered: bool
+
+
 class TrainingHistory(BaseModel):
     params: TrainingParams
     phase: TrainingPhaseType
@@ -58,6 +73,7 @@ class TrainingHistory(BaseModel):
 
     epoch_times: List[float] = Field(default_factory=list)
     total_time: float = 0.0
+    termination: TrainingTermination | None = None
 
     def initialize(self):
         """Initialize standard metric containers."""

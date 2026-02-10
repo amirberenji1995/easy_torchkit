@@ -81,6 +81,8 @@ model = SimpleClassifier(
 # This will now monitor validation loss and trigger the 5-epoch patience rule
 model.fit(X, y, training_params)
 
+print(model.history[-1].termination)
+
 model.visualize_training_history(title="Training history", show_or_export="both")
 
 model.recover_best_model()

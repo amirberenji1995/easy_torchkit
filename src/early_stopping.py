@@ -28,13 +28,15 @@ class EarlyStoppingHandler:
                 {
                     "best_val": init_val,
                     "patience": 0,
-                    "target_hold_count": 0,  # New: Tracks consecutive epochs at target
+                    "target_hold_count": 0,
                 }
             )
 
-    def check(self, epoch: int, train_metrics: dict, val_metrics: dict) -> bool:
+    def check(
+        self, epoch: int, train_metrics: dict, val_metrics: dict
+    ) -> Optional[StoppingCriteria]:
         if not self.criteria:
-            return False
+            return None
 
         for i, c in enumerate(self.criteria):
             metrics = (
@@ -45,7 +47,7 @@ class EarlyStoppingHandler:
             if current_val is None:
                 continue
 
-            # --- New Strategy: Target Value with Hold Duration ---
+            # --- Target Value Logic ---
             if c.target_value is not None:
                 at_target = (
                     current_val >= c.target_value
@@ -56,53 +58,29 @@ class EarlyStoppingHandler:
                 if at_target:
                     self.state[i]["target_hold_count"] += 1
                 else:
-                    self.state[i]["target_hold_count"] = (
-                        0  # Reset if it drops below target
-                    )
+                    self.state[i]["target_hold_count"] = 0
 
-                # Stop only if target is held for 'patience' duration AND min_epoch is passed
                 if (
                     self.state[i]["target_hold_count"] >= c.patience
                     and epoch >= c.min_epoch
                 ):
-                    print(
-                        f"{c.message}",
-                        "\n",
-                        f"✅ Target {c.target_value} held for {c.patience} epochs.",
-                        "\n",
-                        f"Epoch: {epoch}",
-                        "\n",
-                        f"{c.effective_set} {c.metric_name}: {current_val}",
-                    )
-                    return True
+                    return c  # Return the specific criteria object
 
-                # If we are using target_value logic, we skip the standard patience check
-                # for this specific metric to avoid double-triggering.
-                continue
-
-            # --- Standard Strategy: Improvement/Patience ---
-            improved = (
-                current_val < self.state[i]["best_val"]
-                if c.mode == "min"
-                else current_val > self.state[i]["best_val"]
-            )
-
-            if improved:
-                self.state[i]["best_val"] = current_val
-                self.state[i]["patience"] = 0
+            # --- Standard Patience Logic ---
             else:
-                self.state[i]["patience"] += 1
-
-            if self.state[i]["patience"] >= c.patience and epoch >= c.min_epoch:
-                print(
-                    f"{c.message}",
-                    "\n",
-                    f"⏹ Patience exceeded for {c.metric_name}",
-                    "\n",
-                    f"Epoch: {epoch}",
-                    "\n",
-                    f"{c.effective_set} {c.metric_name}: {current_val}",
+                improved = (
+                    current_val < self.state[i]["best_val"]
+                    if c.mode == "min"
+                    else current_val > self.state[i]["best_val"]
                 )
-                return True
 
-        return False
+                if improved:
+                    self.state[i]["best_val"] = current_val
+                    self.state[i]["patience"] = 0
+                else:
+                    self.state[i]["patience"] += 1
+
+                if self.state[i]["patience"] >= c.patience and epoch >= c.min_epoch:
+                    return c  # Return the specific criteria object
+
+        return None

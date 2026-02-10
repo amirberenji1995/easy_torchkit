@@ -5,7 +5,13 @@ import copy
 from abc import ABC, abstractmethod
 from typing import List, TypeVar, Literal, Type, Dict, Callable
 from pathlib import Path
-from .configurations import TrainingParams, Task, TrainingHistory
+from .configurations import (
+    TrainingParams,
+    Task,
+    TrainingHistory,
+    TrainingTermination,
+    TerminationReason,
+)
 from .early_stopping import EarlyStoppingHandler
 import numpy as np
 import random
@@ -142,93 +148,125 @@ class BaseTaskModel(torch.nn.Module, ABC):
         return epoch_loss / x.size(0), torch.cat(all_outputs, dim=0), duration
 
     def _run_training_loop(self, x, y, *, optimizer, loss_fn, params: TrainingParams):
-        # --- 1. Infinite Epoch / Stopping Criteria Check ---
-        criteria = params.stopping_criteria or []
+        start_wall_time = time.time()
 
+        # 1. Stopping Criteria & Epoch setup
+        criteria = params.stopping_criteria or []
         if params.epochs is None:
             if not criteria:
                 raise ValueError(
-                    "Error: 'epochs' is set to None, but 'stopping_criteria' is empty in TrainingParams. "
-                    "You must provide stopping criteria for infinite-loop training."
+                    "Must provide stopping criteria for infinite-loop training."
                 )
-            max_epochs = 1_000_000  # Hard safety limit
+            max_epochs = 1_000_000
         else:
             max_epochs = params.epochs
 
-        # --- Reproducible Split Logic ---
-        # We use a local generator tied to the model's random_state
+        # 2. Reproducible Split Logic
         generator = torch.Generator(device=self.device)
         generator.manual_seed(self.random_state)
-
         indices = torch.randperm(x.size(0), generator=generator, device=self.device)
         split_point = int(x.size(0) * (1 - params.val_size))
 
-        train_idx = indices[:split_point]
-        val_idx = indices[split_point:]
+        x_train, y_train = x[indices[:split_point]], y[indices[:split_point]]
+        x_val, y_val = x[indices[split_point:]], y[indices[split_point:]]
 
-        x_train, y_train = x[train_idx], y[train_idx]
-        x_val, y_val = x[val_idx], y[val_idx]
-
-        # --- Training Initialization ---
+        # 3. Initialization
         history = TrainingHistory(params=params, phase=params.phase)
         history.initialize()
         self.history.append(history)
-
         es_handler = EarlyStoppingHandler(criteria_list=criteria)
 
-        for epoch in range(1, max_epochs + 1):
-            # 1. Training Phase
-            self.train()
-            _, train_logits, duration = self._run_one_epoch(
-                x_train,
-                y_train,
-                optimizer=optimizer,
-                loss_fn=loss_fn,
-                batch_size=params.batch_size,
-                training_step=params.training_step,
-                output_layer=params.output_layer,
+        # Termination tracking variables
+        final_epoch = 0
+        termination_reason = TerminationReason.MAX_EPOCHS
+        stop_details = "Completed all requested epochs."
+        latest_val_metrics = {}
+
+        try:
+            for epoch in range(1, max_epochs + 1):
+                final_epoch = epoch
+
+                # --- Training Step ---
+                self.train()
+                _, train_logits, duration = self._run_one_epoch(
+                    x_train,
+                    y_train,
+                    optimizer=optimizer,
+                    loss_fn=loss_fn,
+                    batch_size=params.batch_size,
+                    training_step=params.training_step,
+                    output_layer=params.output_layer,
+                )
+                train_metrics = self._compute_metrics(
+                    train_logits, y_train, loss_fn, params.metrics
+                )
+                history.log_epoch_time(duration)
+
+                # --- Validation Step ---
+                self.eval()
+                with torch.no_grad():
+                    val_outputs = self._run_evaluation_pass(
+                        x_val, output_layer=params.output_layer
+                    )
+                    val_metrics = self._compute_metrics(
+                        val_outputs, y_val, loss_fn, params.metrics
+                    )
+
+                latest_val_metrics = val_metrics
+                history.log_train(train_metrics)
+                history.log_val(val_metrics)
+
+                # --- Best Model Checkpointing ---
+                if self.track_best_model and val_metrics["loss"] < self.best_val_loss:
+                    self.best_val_loss = val_metrics["loss"]
+                    self.best_epoch = epoch
+                    self.best_metrics = val_metrics
+                    self.best_state_dict = {
+                        k: v.cpu().clone() for k, v in self.state_dict().items()
+                    }
+
+                # --- Early Stopping Check ---
+                triggered = es_handler.check(epoch, train_metrics, val_metrics)
+                if triggered:
+                    termination_reason = TerminationReason.EARLY_STOPPING
+                    stop_details = (
+                        triggered.message or f"Criteria met for {triggered.metric_name}"
+                    )
+                    break
+
+                if epoch % params.print_every == 0:
+                    self._print_epoch_log(
+                        epoch, params, train_metrics, val_metrics, duration
+                    )
+
+            else:  # If loop finishes without 'break'
+                if params.epochs is None:
+                    termination_reason = TerminationReason.HARD_SAFETY_LIMIT
+                    stop_details = f"Reached safety limit of {max_epochs} epochs."
+
+        except KeyboardInterrupt:
+            termination_reason = TerminationReason.MANUAL_INTERRUPTION
+            stop_details = "Training manually interrupted by user."
+            raise  # Re-raise to let the caller handle the interrupt if needed
+
+        finally:
+            # --- Finalize Termination Data ---
+            recovered = False
+            if self.track_best_model and self.best_state_dict:
+                self.load_state_dict(self.best_state_dict)
+                recovered = True
+                print(f"Restored best model from epoch {self.best_epoch}")
+
+            total_duration = time.time() - start_wall_time
+            history.set_total_time(total_duration)
+
+            history.termination = TrainingTermination(
+                epoch=final_epoch,
+                reason=termination_reason,
+                details=stop_details,
+                final_val_metrics=latest_val_metrics,
+                best_model_recovered=recovered,
             )
-            train_metrics = self._compute_metrics(
-                train_logits, y_train, loss_fn, params.metrics
-            )
-
-            history.log_epoch_time(duration)
-
-            # 2. Validation Phase
-            self.eval()
-            with torch.no_grad():
-                val_outputs = self._run_evaluation_pass(
-                    x_val, output_layer=params.output_layer
-                )
-                val_metrics = self._compute_metrics(
-                    val_outputs, y_val, loss_fn, params.metrics
-                )
-
-            # 3. Logging & Checkpointing
-            history.log_train(train_metrics)
-            history.log_val(val_metrics)
-
-            if self.track_best_model and val_metrics["loss"] < self.best_val_loss:
-                self.best_val_loss = val_metrics["loss"]
-                self.best_epoch = epoch
-                self.best_metrics = val_metrics
-                # Ensure we clone to CPU to avoid VRAM leaks during long experiments
-                self.best_state_dict = {
-                    k: v.cpu().clone() for k, v in self.state_dict().items()
-                }
-
-            # 4. Early Stopping & Console Output
-            if es_handler.check(epoch, train_metrics, val_metrics):
-                print(f"Early stopping triggered at epoch {epoch}")
-                break
-
-            if epoch % params.print_every == 0:
-                self._print_epoch_log(epoch, params, train_metrics, val_metrics, duration)
-
-            if params.epochs is None and epoch == max_epochs:
-                print(
-                    f"Reached hard safety limit of {max_epochs} epochs without early stopping."
-                )
 
     def _print_epoch_log(self, epoch, params, train_m, val_m, duration=None):
         # 1. Format the metrics string
@@ -242,10 +280,10 @@ class BaseTaskModel(torch.nn.Module, ABC):
             if params.metrics
             else ""
         )
-        
+
         # 2. Handle "Infinite" epochs display
         total_epochs = params.epochs if params.epochs is not None else "NONE"
-        
+
         # 3. Format the timing string
         # If duration is very small, we show ms; otherwise, seconds.
         time_str = ""
