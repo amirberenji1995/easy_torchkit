@@ -1,5 +1,5 @@
 import torch
-from typing import Dict, Literal
+from typing import List, Callable, Dict, Literal
 from sklearn.metrics import accuracy_score
 import seaborn as sns
 from .base_model import BaseTaskModel
@@ -23,39 +23,46 @@ class ClassificationModel(BaseTaskModel):
             random_state=random_state,
         )
 
-    def _run_evaluation_pass(
-        self, x: torch.Tensor, output_layer: str | None = None
-    ) -> torch.Tensor:
-        if isinstance(x, (list, tuple)) or (x.ndim >= 3 and x.size(1) == 2):
-            x1, x2 = x if isinstance(x, (list, tuple)) else (x[:, 0], x[:, 1])
-            z1, z2 = (
-                self(x1, output_layer=output_layer),
-                self(x2, output_layer=output_layer),
-            )
+    def _run_evaluation_pass(self, x: torch.Tensor, output_layer: str | None = None) -> torch.Tensor:
+        # Only run Siamese logic if we are NOT doing standard classification
+        # or if we explicitly want Siamese behavior.
+        is_siamese_input = x.ndim >= 2 and x.size(1) == 2
+        
+        # You could check if the current loss function in training_params is Contrastive
+        # But a simpler fix is checking if you actually WANT to split the data:
+        if is_siamese_input and getattr(self, "use_siamese_logic", False): 
+            x1, x2 = x[:, 0], x[:, 1]
+            z1 = self(x1, output_layer=output_layer)
+            z2 = self(x2, output_layer=output_layer)
+            return torch.cat([z1.view(z1.size(0), -1), z2.view(z2.size(0), -1)], dim=0)
 
-            diff = z1 - z2
-            dist = torch.norm(diff.reshape(diff.size(0), -1), p=2, dim=1)
-            return torch.stack([dist, 1.0 - dist], dim=1)
-
+        # For your LSTM, it will now fall through to here:
         return super()._run_evaluation_pass(x, output_layer=output_layer)
 
-    def _compute_metrics(self, logits, y, loss_fn, metrics=None) -> Dict[str, float]:
-        if logits.ndim > 2:
-            logits = logits.view(logits.size(0), -1)
-
+    def _compute_metrics(
+        self,
+        logits: torch.Tensor,
+        y: torch.Tensor,
+        loss_fn: Callable,
+        metrics: List = None,
+    ) -> Dict[str, float]:
         if isinstance(loss_fn, ContrastiveLoss):
-            loss_val = loss_fn.forward(
-                logits[:, 0], torch.zeros_like(logits[:, 0]), y.float()
-            )
+            z1, z2 = logits.chunk(2, dim=0)
+            loss_val = loss_fn(z1, z2, y.view(-1).float())
+            preds = None
         else:
+            if logits.ndim > 2:
+                logits = logits.view(logits.size(0), -1)
             loss_val = loss_fn(logits, y)
+            preds = torch.argmax(logits, dim=1)
 
-        preds = torch.argmax(logits, dim=1)
         res = {"loss": loss_val.item()}
-
         if metrics:
             for m in metrics:
-                res[m.name] = m.function(y.cpu().numpy(), preds.cpu().numpy())
+                if isinstance(m.function, torch.nn.Module):
+                    res[m.name] = m.function(logits, y).item()
+                elif preds is not None:
+                    res[m.name] = m.function(y.cpu().numpy(), preds.cpu().numpy())
         return res
 
     def predict(self, x: torch.Tensor, output_layer: str = None) -> torch.Tensor:

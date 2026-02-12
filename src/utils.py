@@ -19,16 +19,11 @@ class ContrastiveLoss(torch.nn.Module):
         super().__init__()
         self.margin = margin
 
-    def forward(self, z1: torch.Tensor, z2: torch.Tensor, y: torch.Tensor):
-        # Calculate Euclidean distance agnostic of input dimensions (flattening all but batch)
-        # y = 1 for similar, 0 for dissimilar
-        diff = z1 - z2
-        dist = torch.norm(diff.reshape(diff.size(0), -1), p=2, dim=1)
-
-        loss_similar = y * dist.pow(2)
-        loss_dissimilar = (1 - y) * torch.clamp(self.margin - dist, min=0).pow(2)
-
-        return (loss_similar + loss_dissimilar).mean()
+    def forward(self, z1, z2, y):
+        # y = 1 → similar, 0 → dissimilar
+        dist = torch.nn.functional.pairwise_distance(z1, z2)
+        loss = y * dist.pow(2) + (1 - y) * torch.clamp(self.margin - dist, min=0).pow(2)
+        return loss.mean()
 
 
 def supervised_step(*, model, xb, yb, optimizer, loss_fn, output_layer=None):
@@ -44,8 +39,8 @@ def supervised_step(*, model, xb, yb, optimizer, loss_fn, output_layer=None):
 def contrastive_step(
     *,
     model: torch.nn.Module,
-    xb: torch.Tensor | tuple,  # Unpacks if passed as (x1, x2)
-    yb: torch.Tensor,
+    xb: torch.Tensor,  # [B, 2, C, L]
+    yb: torch.Tensor,  # [B, 1] or [B]
     optimizer: torch.optim.Optimizer,
     loss_fn: Callable,
     output_layer: str | None = None,
@@ -53,26 +48,26 @@ def contrastive_step(
     model.train()
     optimizer.zero_grad()
 
-    # Rule 3: Handle unpacking here. Assumes xb is (x1, x2) or similar
-    x1, x2 = xb if isinstance(xb, (list, tuple)) else (xb[:, 0], xb[:, 1])
+    # Split pairs
+    x1 = xb[:, 0]  # [B, C, L]
+    x2 = xb[:, 1]  # [B, C, L]
 
+    # Forward independently
     z1 = model(x1, output_layer=output_layer)
     z2 = model(x2, output_layer=output_layer)
 
-    loss = loss_fn(z1, z2, yb.view(-1).float())
+    # Flatten embeddings if needed
+    z1 = z1.view(z1.size(0), -1)
+    z2 = z2.view(z2.size(0), -1)
+
+    yb = yb.view(-1).float()
+
+    loss = loss_fn(z1, z2, yb)
     loss.backward()
     optimizer.step()
 
-    # Rule 5: Facilitate Accuracy calculation
-    # We create pseudo-logits where:
-    # Column 0: Dissimilarity (represented by distance)
-    # Column 1: Similarity (represented by proximity to 0)
-    with torch.no_grad():
-        diff = z1 - z2
-        dist = torch.norm(diff.reshape(diff.size(0), -1), p=2, dim=1)
-        # Margin logic: if distance < 0.5 * margin, it's 'Similar'
-        margin = getattr(loss_fn, "margin", 1.0)
-        logits = torch.stack([dist, margin - dist], dim=1)
+    # Return concatenated embeddings for logging compatibility
+    logits = torch.cat([z1.detach(), z2.detach()], dim=0)
 
     return loss.detach(), logits
 
