@@ -26,7 +26,7 @@ class SupervisedTrainingStep(TrainingStep):
         preds = torch.argmax(logits, dim=1)
 
         return (
-            loss.detach(),
+            loss.detach().item(),
             ModelOutput(
                 loss_input=(logits.detach(), yb),
                 preds=preds.detach(),

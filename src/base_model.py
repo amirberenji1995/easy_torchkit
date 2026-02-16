@@ -140,12 +140,15 @@ class BaseTaskModel(torch.nn.Module, ABC):
         self,
         *,
         x: torch.Tensor,
+        y: torch.Tensor,
         training_step: TrainingStep,
         output_layer: str | None = None,
     ):
         self.eval()
         with torch.no_grad():
-            out = training_step.eval_batch(model=self, xb=x, output_layer=output_layer)
+            out = training_step.eval_batch(
+                model=self, xb=x, yb=y, output_layer=output_layer
+            )
             return [out]
 
     def _run_one_epoch(
@@ -224,7 +227,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
                 train_metrics = self._compute_metrics(
                     train_outputs, y_train, loss_fn, params.metrics
                 )
-                train_metrics["loss"] = train_loss.item()
+                train_metrics["loss"] = train_loss
                 history.log_epoch_time(duration)
 
                 # --- Validation ---
@@ -232,6 +235,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
                 with torch.no_grad():
                     val_outputs = self._run_evaluation_pass(
                         x=x_val,
+                        y=y_val,
                         training_step=params.training_step,
                         output_layer=params.output_layer,
                     )

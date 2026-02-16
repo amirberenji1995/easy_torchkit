@@ -55,6 +55,7 @@ class ClassificationModel(BaseTaskModel):
 
             outputs = self._run_evaluation_pass(
                 x=x,
+                y=y,
                 training_step=training_step,
                 output_layer=output_layer,
             )
