@@ -1,11 +1,15 @@
 import torch
 import torch.nn as nn
 from src.classification import ClassificationModel
-from src.configurations import TrainingPhaseType, TrainingParams, EvaluationMetric
-from src.early_stopping import StoppingCriteria, EffectiveSet  # Added imports
+from src.contracts.configurations import (
+    TrainingPhaseType,
+    EvaluationMetric,
+)
+from src.contracts.training_params import TrainingParams
+from src.early_stopping import StoppingCriteria, EffectiveSet
 from typing import OrderedDict
 from sklearn.metrics import accuracy_score
-from src.utils import supervised_step
+from src.training_steps.supervised_training_step import SupervisedTrainingStep
 
 
 class SimpleClassifier(ClassificationModel):
@@ -42,7 +46,6 @@ accuracy_metric = EvaluationMetric(
     function=accuracy_score,
 )
 
-# Define the criteria for 5 epochs of no improvement in validation loss
 loss_criteria = [
     StoppingCriteria(
         metric_name="loss",
@@ -54,22 +57,21 @@ loss_criteria = [
 ]
 
 lr = 0.001
-# We use a dummy epoch value for weight decay calculation since training is dynamic
 total_epochs_estimate = 100
 
 training_params = TrainingParams(
-    epochs=None,  # Training will run until criteria is met
+    epochs=None,
     lr=lr,
     batch_size="full",
     val_size=0.25,
-    print_every=1,  # Set to 1 to see the early stopping more clearly
+    print_every=1,
     metrics=[accuracy_metric],
     loss_fn=torch.nn.CrossEntropyLoss(),
     optimizer=torch.optim.Adam,
     optimizer_params={"weight_decay": lr / total_epochs_estimate},
-    training_step=supervised_step,
+    training_step=SupervisedTrainingStep(),
     phase=TrainingPhaseType.training,
-    stopping_criteria=loss_criteria,  # Pass criteria into TrainingParams
+    stopping_criteria=loss_criteria,
 )
 
 model = SimpleClassifier(
@@ -78,7 +80,7 @@ model = SimpleClassifier(
     device=torch.device("cpu"),
 )
 
-# This will now monitor validation loss and trigger the 5-epoch patience rule
+
 model.fit(X, y, training_params)
 
 print(model.history[-1].termination)
@@ -87,7 +89,7 @@ model.visualize_training_history(title="Training history", show_or_export="both"
 
 model.recover_best_model()
 
-results = model.evaluate(X, y)
+results = model.evaluate(X, y, training_step=SupervisedTrainingStep())
 print("Final evaluation:", results)
 
 print(

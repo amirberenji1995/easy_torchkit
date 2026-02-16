@@ -1,67 +1,11 @@
-from pydantic import BaseModel, Field
-from enum import StrEnum
-from typing import Callable, List, Literal, Dict, Optional, Any
-import torch
-from .utils import supervised_step
 import matplotlib.pyplot as plt
 import seaborn as sns
-from .early_stopping import StoppingCriteria
+from pydantic import BaseModel, Field
+from typing import Dict, List, Literal
+from .training_params import TrainingParams
+from .configurations import TrainingPhaseType, TrainingTermination
 
 sns.set_theme()
-
-
-class Task(StrEnum):
-    classification = "classification"
-    regression = "regression"
-
-
-class TrainingHistoryType(StrEnum):
-    training_history = "training_history"
-    fine_tuning_history = "fine_tuning_history"
-
-
-class EvaluationMetric(BaseModel):
-    name: str
-    function: Callable
-
-
-class TrainingPhaseType(StrEnum):
-    training = "training"
-    fine_tuning = "fine_tuning"
-    pre_training = "pre_training"
-
-
-class TrainingParams(BaseModel):
-    epochs: int | None = 10
-    lr: float = 0.001
-    batch_size: Literal["full"] | int = 64
-    val_size: float = 0.25
-    print_every: int = 1
-    metrics: List[EvaluationMetric] = []
-    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = (
-        torch.nn.CrossEntropyLoss
-    )
-    optimizer: type[torch.optim.Optimizer] = torch.optim.Adam
-    optimizer_params: Optional[Dict[str, Any]] = None
-    phase: TrainingPhaseType = TrainingPhaseType.training
-    output_layer: str | None = None
-    training_step: Callable = supervised_step
-    stopping_criteria: List[StoppingCriteria] | None = None
-
-
-class TerminationReason(StrEnum):
-    MAX_EPOCHS = "max_epochs"
-    EARLY_STOPPING = "early_stopping"
-    HARD_SAFETY_LIMIT = "hard_safety_limit"
-    MANUAL_INTERRUPTION = "manual_interruption"
-
-
-class TrainingTermination(BaseModel):
-    epoch: int
-    reason: TerminationReason
-    details: Optional[str] = None
-    final_val_metrics: Dict[str, float]
-    best_model_recovered: bool
 
 
 class TrainingHistory(BaseModel):
