@@ -14,7 +14,7 @@ class TrainingParams(BaseModel):
     val_size: float = 0.25
     print_every: int = 1
     metrics: List[EvaluationMetric] = []
-    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = (
+    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = (
         torch.nn.CrossEntropyLoss
     )
     optimizer: type[torch.optim.Optimizer] = torch.optim.Adam

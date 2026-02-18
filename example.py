@@ -12,6 +12,7 @@ from src.training_steps.siamese_training_step import (
     SiameseTrainingStep,
     ContrastiveLoss,
 )
+from src.training_steps.dynamic_bootstrapping import DynamicBootstrappingTrainingStep
 
 
 class SimpleClassifier(ClassificationModel):
@@ -109,34 +110,52 @@ results = model.evaluate(x=X, y=y, training_step=SupervisedTrainingStep())
 print("Final supervised evaluation:", results)
 
 
-pairs = torch.randn(N, 2, input_dim)
-labels = torch.randint(0, 2, (N,))
+# pairs = torch.randn(N, 2, input_dim)
+# labels = torch.randint(0, 2, (N,))
 
-print("\n=== Contrastive Fine-Tuning ===")
+# print("\n=== Contrastive Fine-Tuning ===")
 
-contrastive_params = TrainingParams(
+# contrastive_params = TrainingParams(
+#     epochs=5,
+#     lr=0.001,
+#     batch_size="full",
+#     val_size=0.25,
+#     print_every=1,
+#     metrics=[],
+#     loss_fn=ContrastiveLoss(margin=1.0),
+#     optimizer=torch.optim.Adam,
+#     optimizer_params={"weight_decay": 1e-4},
+#     training_step=SiameseTrainingStep(),
+#     phase=TrainingPhaseType.fine_tuning,
+#     stopping_criteria=[],
+# )
+
+# # Fine-tune with Siamese contrastive loss
+# model.fit(pairs, labels, contrastive_params)
+
+# # Evaluate agian
+# print(
+#     "Contrastive embedding evaluation:",
+#     model.evaluate(
+#         X,
+#         y,
+#     ),
+# )
+
+dyn_bootstrapping_params = TrainingParams(
     epochs=5,
     lr=0.001,
     batch_size="full",
     val_size=0.25,
     print_every=1,
-    metrics=[],
-    loss_fn=ContrastiveLoss(margin=1.0),
+    metrics=[accuracy_metric],
+    loss_fn=torch.nn.CrossEntropyLoss(),
     optimizer=torch.optim.Adam,
     optimizer_params={"weight_decay": 1e-4},
-    training_step=SiameseTrainingStep(),
+    training_step=DynamicBootstrappingTrainingStep(),
     phase=TrainingPhaseType.fine_tuning,
     stopping_criteria=[],
 )
 
-# Fine-tune with Siamese contrastive loss
-model.fit(pairs, labels, contrastive_params)
-
-# Evaluate agian
-print(
-    "Contrastive embedding evaluation:",
-    model.evaluate(
-        X,
-        y,
-    ),
-)
+model.fit(X, y, dyn_bootstrapping_params)
+model.evaluate(X, y)
