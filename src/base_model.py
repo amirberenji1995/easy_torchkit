@@ -269,9 +269,14 @@ class BaseTaskModel(torch.nn.Module, ABC):
                     self.best_state_dict = {
                         k: v.cpu().clone() for k, v in self.state_dict().items()
                     }
-
+                timing_metrics = {
+                    "epoch_time": duration,
+                    "total_time": time.time() - start_wall_time,
+                }
                 # --- Early stopping ---
-                triggered = es_handler.check(epoch, train_metrics, val_metrics)
+                triggered = es_handler.check(
+                    epoch, train_metrics, val_metrics, timing_metrics=timing_metrics
+                )
                 if triggered:
                     termination_reason = TerminationReason.EARLY_STOPPING
                     stop_details = (

@@ -10,7 +10,7 @@ class EffectiveSet(StrEnum):
 
 class StoppingCriteria(BaseModel):
     metric_name: str = "loss"
-    effective_set: EffectiveSet = EffectiveSet.VAL
+    effective_set: EffectiveSet | None = EffectiveSet.VAL
     mode: Literal["min", "max"] = "min"
     patience: int = 50
     min_epoch: int = 0
@@ -33,16 +33,22 @@ class EarlyStoppingHandler:
             )
 
     def check(
-        self, epoch: int, train_metrics: dict, val_metrics: dict
+        self, epoch: int, train_metrics: dict, val_metrics: dict, timing_metrics: dict
     ) -> Optional[StoppingCriteria]:
         if not self.criteria:
             return None
 
         for i, c in enumerate(self.criteria):
-            metrics = (
-                train_metrics if c.effective_set == EffectiveSet.TRAIN else val_metrics
-            )
-            current_val = metrics.get(c.metric_name)
+            if c.metric_name in ["epoch_time", "total_time"]:
+                current_val = timing_metrics.get(c.metric_name)
+
+            else:
+                metrics = (
+                    train_metrics
+                    if c.effective_set == EffectiveSet.TRAIN
+                    else val_metrics
+                )
+                current_val = metrics.get(c.metric_name)
 
             if current_val is None:
                 continue
