@@ -186,7 +186,9 @@ class BaseTaskModel(torch.nn.Module, ABC):
         duration = time.time() - start_time
         return epoch_loss / x.size(0), all_outputs, duration
 
-    def _run_training_loop(self, x, y, *, optimizer, loss_fn, params: TrainingParams):
+    def _run_training_loop(
+        self, x, y, *, optimizer, loss_fn, params: TrainingParams, eval_set=None
+    ):
         start_wall_time = time.time()
         criteria = params.stopping_criteria or []
         max_epochs = params.epochs or (1_000_000 if criteria else None)
@@ -195,10 +197,15 @@ class BaseTaskModel(torch.nn.Module, ABC):
 
         generator = torch.Generator(device=self.device)
         generator.manual_seed(self.random_state)
-        indices = torch.randperm(x.size(0), generator=generator, device=self.device)
-        split_point = int(x.size(0) * (1 - params.val_size))
-        x_train, y_train = x[indices[:split_point]], y[indices[:split_point]]
-        x_val, y_val = x[indices[split_point:]], y[indices[split_point:]]
+
+        if eval_set is not None:
+            x_train, y_train = x, y
+            x_val, y_val = eval_set
+        else:
+            indices = torch.randperm(x.size(0), generator=generator, device=self.device)
+            split_point = int(x.size(0) * (1 - params.val_size))
+            x_train, y_train = x[indices[:split_point]], y[indices[:split_point]]
+            x_val, y_val = x[indices[split_point:]], y[indices[split_point:]]
 
         history = TrainingHistory(params=params, phase=params.phase)
         history.initialize()
@@ -336,7 +343,13 @@ class BaseTaskModel(torch.nn.Module, ABC):
             f"{m_str}{time_str}"
         )
 
-    def fit(self, x: torch.Tensor, y: torch.Tensor, training_params: TrainingParams):
+    def fit(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        training_params: TrainingParams,
+        eval_set=None,
+    ):
         self.to(self.device)
         start_fit_time = time.time()
         optimizer = self._optimizer_creator(training_params)
@@ -346,6 +359,7 @@ class BaseTaskModel(torch.nn.Module, ABC):
             optimizer=optimizer,
             loss_fn=training_params.loss_fn,
             params=training_params,
+            eval_set=eval_set,
         )
         if self.history:
             self.history[-1].set_total_time(time.time() - start_fit_time)
